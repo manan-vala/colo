@@ -1,0 +1,19 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+cdk.out/
+
+# Generated stack outputs (environment-specific)
+web/src/aws-outputs.json
+
+# Logs and env files
+*.log
+.env*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
