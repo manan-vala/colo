@@ -3,10 +3,10 @@ node_modules/
 
 # Build output
 dist/
-cdk.out/
 
-# Generated stack outputs (environment-specific)
-web/src/aws-outputs.json
+# Wrangler local state and local secrets
+.wrangler/
+.dev.vars*
 
 # Logs and env files
 *.log

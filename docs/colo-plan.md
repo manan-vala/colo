@@ -1,45 +1,59 @@
 # Colo — Build & Deployment Plan
 
-**Status:** Draft v2
-**Date:** 13 September 2026
+**Status:** Draft v3
+**Date:** 14 September 2026
 **Owner:** SWC
+**Platform:** Cloudflare Workers (Free plan)
 **Scale target:** 1–2 monthly active users (personal project)
-**Cost target:** under $0.25/month steady state ($0 while new-account credits last)
+**Cost target:** $0/month, hard-capped (no payment method on the account)
+
+---
+
+## 0. Revision history
+
+| Version | Date | Change |
+|---|---|---|
+| v1 | 13 Sep 2026 | First draft on AWS serverless: S3 + CloudFront, Cognito, AppSync, DynamoDB |
+| v2 | 13 Sep 2026 | Corrected AWS Free Tier assumptions; shared-workspace access model; app named Colo (commit `be40456`) |
+| v3 | 14 Sep 2026 | **Moved to Cloudflare.** One Durable Object holds all data (SQLite) and the WebSocket hub; invite-only passkey sign-in on `*.workers.dev`. Rationale: [ADR 0001](decisions/0001-move-from-aws-to-cloudflare.md) and [ADR 0002](decisions/0002-passkey-auth-on-workers-dev.md) |
+
+The AWS design is no longer part of this plan; it remains readable in git history at commit `be40456`.
 
 ---
 
 ## 1. What we are building
 
-**Colo** is a browser-based collaborative notes application. Two people sign in with their own accounts, see a shared set of notes, and edit them — with changes appearing on the other person's screen in near real time rather than requiring a manual refresh.
+**Colo** is a browser-based collaborative notes application. Two people sign in with their own passkeys, see a shared set of notes, and edit them — with changes appearing on the other person's screen in near real time rather than requiring a manual refresh.
 
-The whole thing is serverless. There is no EC2 instance, no container, no database server to patch, and nothing that costs money while idle. Every component except S3 and AppSync is chosen so that at this usage level it sits inside an AWS *always-free* allowance. S3 and AppSync have no free allowance this project can rely on — whatever the account's age — and cost a few cents a month instead (§9.1).
+The whole thing runs on Cloudflare's Workers Free plan. There is no server, container or database to patch, nothing is billed while idle, and no payment method is attached to the account — so the monthly bill is $0 by construction. The price of that guarantee is that if a daily free limit is ever exceeded, requests fail until the limits reset at 00:00 UTC (05:30 IST) instead of costing money (§9).
 
 ### 1.1 In scope (MVP)
 
 | # | Capability | Notes |
 |---|---|---|
-| F1 | Email + password sign-in | Invite-only; no public self-registration |
-| F2 | List all notes the user has access to | Sorted by last updated |
-| F3 | Create, rename, delete a note | Soft delete preferred (recoverable) |
-| F4 | Edit note body and save | Autosave on a debounce, plus explicit save |
-| F5 | Live propagation of saved changes | Other connected clients update within ~1s |
-| F6 | Conflict detection | Optimistic concurrency via a `version` field |
+| F1 | Passkey sign-in, invite-only | No passwords. An admin issues one-time invite links; there is no public registration |
+| F2 | List all notes | Sorted by last updated |
+| F3 | Create, rename, delete a note | Soft delete (recoverable) |
+| F4 | Edit note body and save | Autosave on an 800 ms debounce, plus explicit save |
+| F5 | Live propagation of saved changes | Other connected clients update within ~1 s (typically much faster) |
+| F6 | Conflict detection | Optimistic concurrency via a `version` column |
 | F7 | "Last edited by X at HH:MM" attribution | Cheap trust signal for two-person editing |
-| F8 | Works on mobile browser | Responsive layout; no native app |
+| F8 | Works on mobile browser | Responsive layout; passkeys work with phone biometrics |
+| F9 | Presence | Who is online and which note they have open — nearly free, because the Durable Object already holds every connection |
 
 ### 1.2 Explicitly out of scope (v1)
 
-Rich text formatting beyond Markdown, file/image attachments, folders or tags, full-text search across notes, offline-first sync, note sharing with people outside the two-user pool, and a custom domain. Each of these is a deliberate deferral, not an oversight — they are listed again in §11 as candidate follow-ons.
+Rich text formatting beyond Markdown, file/image attachments, folders or tags, full-text search across notes, offline-first sync, sharing with people outside the two-user pool, and a custom domain. Each is a deliberate deferral; see §12.
 
 ### 1.3 The one genuinely open design question
 
-"Real time" means two different things and they cost very different amounts of effort:
+"Real time" means two different things:
 
-**Tier A — live propagation on save (planned for v1).** You type, the app autosaves after a pause, and within about a second the other person's view updates. This is a solved problem: an AppSync subscription pushes the new note state to every subscribed client. Simple, robust, and adequate for two people who are mostly *not* typing in the same paragraph at the same instant.
+**Tier A — live propagation on save (planned for v1).** You type, the app autosaves after a pause, and the other person's view updates within about a second. The Durable Object that performs the save immediately pushes the new note to every other open connection.
 
-**Tier B — simultaneous character-level co-editing (deferred to Phase 4).** Google Docs behaviour: both people type in the same sentence at once and neither loses keystrokes. AWS gives you the *transport* for this but not the *merge logic*. Concurrent edits to the same text need a CRDT — [Yjs](https://github.com/yjs/yjs) is the standard choice — layered onto the frontend, with AppSync carrying the binary update deltas. This roughly doubles the frontend complexity and is worth doing only if Tier A proves genuinely annoying in practice.
+**Tier B — simultaneous character-level co-editing (deferred to M5).** Google Docs behaviour: both people type in the same sentence at once and neither loses keystrokes. This needs a CRDT — [Yjs](https://github.com/yjs/yjs) is the standard choice. On Cloudflare it fits the existing design without new services: the same Durable Object holds each note's Yjs document, merges updates server-side and persists them to SQLite, and the editor becomes CodeMirror 6 with `y-codemirror.next`.
 
-**Recommendation:** build Tier A, use it for a few weeks, and only then decide whether Tier B earns its complexity. The architecture below does not need to change to add Tier B later — it adds a mutation and a subscription, not a new service.
+**Recommendation:** build Tier A, use it for a couple of weeks, and only then decide whether Tier B earns its extra frontend complexity.
 
 ---
 
@@ -49,261 +63,231 @@ Rich text formatting beyond Markdown, file/image attachments, folders or tags, f
 flowchart LR
     U["Browser<br/>React SPA"]
 
-    subgraph edge["Edge"]
-        CF["CloudFront<br/>distribution"]
+    subgraph cf["Cloudflare - Workers Free plan"]
+        SA["Static Assets<br/>SPA bundle"]
+        W["Colo Worker<br/>/api router"]
+        DO[("Workspace Durable Object<br/>SQLite + WebSocket hub")]
     end
 
-    subgraph aws["AWS account"]
-        S3["S3 bucket<br/>static assets<br/>private + OAC"]
-        COG["Cognito<br/>User Pool"]
-        APP["AppSync<br/>GraphQL API"]
-        DDB[("DynamoDB<br/>ColoTable")]
-        LAM["Lambda<br/>resolvers<br/>optional"]
-    end
-
-    U -->|"HTTPS: app shell"| CF
-    CF -->|"origin fetch"| S3
-    U -->|"sign in / refresh token"| COG
-    U -->|"GraphQL queries + mutations"| APP
-    U <-->|"WebSocket subscriptions"| APP
-    APP -->|"validate JWT"| COG
-    APP -->|"direct resolvers"| DDB
-    APP -.->|"custom logic only"| LAM
-    LAM --> DDB
+    U -->|"HTTPS: app shell"| SA
+    U -->|"HTTPS: /api auth, me, export"| W
+    U <-->|"WebSocket: /api/ws"| W
+    W -->|"forwards every /api request"| DO
 ```
+
+Everything is served from one hostname, `colo.<subdomain>.workers.dev`, so there is no CORS and the session cookie is first-party.
 
 ### 2.1 Component responsibilities
 
 | Component | Responsibility | Why this one |
 |---|---|---|
-| **S3** | Stores the built static assets: `index.html`, JS/CSS bundles, icons | Cheapest possible static host; bucket stays private |
-| **CloudFront** | Public HTTPS entry point, TLS, caching, SPA routing fallback | Always-free tier is generous; gives HTTPS on the default `*.cloudfront.net` domain with zero certificate work |
-| **Cognito User Pool** | User directory, sign-in, password reset, JWT issuance | Removes all credential-handling code; perpetual free tier to 10,000 MAU |
-| **AppSync** | GraphQL API, authorization, and — critically — managed WebSocket subscriptions | Managed real-time without writing connection-tracking code; native Cognito authorizer |
-| **DynamoDB** | Note storage and access-control records | Always-free 25 GB + 25 RCU/WCU; single-digit-ms reads |
-| **Lambda** | Only for logic DynamoDB resolvers can't express | Always-free tier; kept out of the hot path where possible |
+| **Workers Static Assets** | Serves the built SPA (`index.html`, hashed JS/CSS), SPA routing fallback, `_headers` for cache and security headers | Free and unlimited; static requests never invoke the Worker |
+| **Colo Worker** | Forwards `/api/*` to the Workspace Durable Object; adds security headers to API responses. Nothing else | Keeping it a ~30-line router means the Free plan's 10 ms CPU limit per invocation never matters |
+| **Workspace Durable Object** (one instance, named `default`) | All state in its embedded SQLite: members, passkeys, sessions, invites, notes. Authentication, note operations, WebSocket connections, broadcast, presence | Single-threaded, so a write and its broadcast happen in one serialized step; hibernating WebSockets cost nothing while idle |
+| **Workers Logs** | Request and exception logs | Free: 200,000 events/day, 3-day retention |
+| **Workers Builds** (M4) | Build and deploy on push to GitHub | Free: 3,000 build minutes/month; no Cloudflare API token stored in GitHub |
 
-### 2.2 Why AppSync rather than API Gateway WebSocket + Lambda
+### 2.2 Why one Durable Object instead of D1 plus a Durable Object
 
-Both can deliver real-time. The raw route (API Gateway WebSocket API + a Lambda that tracks connection IDs in DynamoDB and fans out messages) means writing and owning `$connect`/`$disconnect`/`$default` handlers, a connections table, stale-connection cleanup, and the fan-out loop. AppSync does all of that internally: you declare a subscription in the schema, tag it to a mutation, and connected clients receive the payload.
+The obvious Cloudflare design is D1 for storage and a Durable Object only for fanning out updates. Colo instead keeps everything in one Durable Object:
 
-The trade-off is that AppSync has no always-free allowance, so it is billed from the first request (§9.1). At the traffic level in §9 that costs about ten cents a month, which does not justify maintaining several hundred lines of connection-management code.
+- **One place holds the data.** Durable Objects carry their own SQLite database, so D1 adds nothing but a second service and a second call.
+- **No race between saving and broadcasting.** The object processes one event at a time, so `UPDATE … WHERE version = ?` and "send to the other sockets" happen atomically from the clients' point of view.
+- **Edits arrive as WebSocket messages.** Incoming WebSocket messages are billed at a 20:1 ratio against Durable Object requests, so autosaves cost a twentieth of what the same number of HTTP requests would.
+- **No echo-suppression IDs.** The object knows which socket sent an edit and simply broadcasts to all the others.
+- **The Worker stays trivial.** WebAuthn verification and session checks run inside the Durable Object, whose CPU limit is 30 seconds per request rather than 10 ms.
+- **Tier B needs no new infrastructure** (§1.3).
+
+The trade-offs, accepted knowingly:
+
+- **Data is only reachable through the object.** There is no `wrangler d1 execute`-style ad-hoc SQL; inspection and backup go through `/api/export` (§4.1).
+- **One object lives in one location.** It is placed near its first request; the Worker passes `locationHint: "apac"` so it lands close to both users.
+- **Single-threaded throughput** is thousands of simple SQLite operations a second — orders of magnitude more than two people can generate.
+
+Why the login is custom passkeys rather than Cloudflare Access is recorded in [ADR 0002](decisions/0002-passkey-auth-on-workers-dev.md): Worker-level Access does not support WebSocket connections, and hostname-based Access needs a custom domain.
 
 ### 2.3 Key request flows
 
-**App load.** Browser requests `https://dxxxx.cloudfront.net/` → CloudFront serves `index.html` from S3 (or its cache) → SPA boots, checks for a valid Cognito session in storage → if absent, renders the sign-in screen; if present, opens the AppSync client with the ID token.
+**App load.** Browser requests `https://colo.<subdomain>.workers.dev/` → Static Assets serve `index.html` and bundles without running the Worker → SPA calls `GET /api/me` → `401` shows the sign-in screen; `200` opens the WebSocket.
 
-**Sign-in.** SPA calls Cognito directly over HTTPS (SRP flow, no client secret) → Cognito returns ID, access, and refresh tokens → SPA stores them and attaches the ID token to every AppSync call. The refresh token silently renews the short-lived tokens in the background. The SPA then calls `me` to load the user's display name; a Cognito user with no Member item gets `Unauthorized` and sees a "no access" screen.
+**Invite (first time for each person).** Admin runs `npm run invite -- --email … --name …` → the script calls `POST /api/admin/invites` with the `ADMIN_TOKEN` secret → the object creates the member if new, stores the SHA-256 hash of a random invite token, and returns `https://colo.<subdomain>.workers.dev/invite#<token>` → admin sends the link privately → the invitee opens it; the SPA reads the token from the URL fragment (never sent to the server in the URL, so never logged) → `POST /api/auth/register/options` → browser creates a passkey (Face ID, fingerprint or device PIN) → `POST /api/auth/register/verify` → the object verifies it, stores the public key, marks the invite used, creates a session and sets the cookie.
 
-**Loading notes.** SPA issues `listNotes` → AppSync validates the JWT against the User Pool, extracts `sub` (the user's stable identifier) → the resolver confirms a Member item exists for that `sub` → queries GSI1 for the workspace's live notes, newest first → returns the list.
+**Sign-in.** `POST /api/auth/login/options` returns a challenge with no username (discoverable credentials) → browser shows the passkey prompt → `POST /api/auth/login/verify` → the object finds the credential, verifies the signature, creates a session and sets the cookie.
 
-**Editing.** User types; frontend debounces ~800 ms, then fires `updateNote` carrying `expectedVersion` and the tab's `originId` → the resolver checks membership, then performs a conditional write (`version = :expectedVersion` and the note is not deleted) → on success, version increments and DynamoDB returns the new item → AppSync publishes it to everyone subscribed to that note and to the note list → their editors and lists reconcile. On condition failure the client refetches and surfaces a conflict rather than silently overwriting.
+**Connect.** SPA opens `wss://…/api/ws` → Worker forwards the upgrade → the object checks the `Origin` header and the session cookie → accepts the socket with tags `member:<id>` and `session:<hash-prefix>` and stores `{memberId, sessionExpiresAt}` as the socket attachment → sends `snapshot` (current member, members list, note summaries without bodies) → broadcasts `presence`.
 
-**Real-time receive.** Each open note holds an `onNoteChanged(noteId:)` subscription over WebSocket, and the note list holds `onNoteListChanged`; both are membership-checked when they open. Each browser tab generates an `originId` once (`crypto.randomUUID()`) and sends it with every mutation. The resolver stores it on the note, so every payload carries the `originId` of the tab that made the change, and a tab ignores payloads carrying its own — you never fight your own echo.
+**Editing.** User types; the client debounces 800 ms, then sends `update` with `expectedVersion` → the object runs `UPDATE notes SET …, version = version + 1 WHERE id = ? AND version = ? AND deleted_at IS NULL` → one row changed: `ack` to the sender and `changed` to every other socket → no row changed: `error` with code `CONFLICT` and the current note, and the client shows the conflict banner rather than silently overwriting.
+
+**Receiving.** On `changed`, the list re-sorts. If that note is open with no unsaved local edits, the editor takes the new version; if there are unsaved edits, the conflict banner offers "keep mine" (resend against the new version) or "take theirs".
+
+**Disconnect and reconnect.** The client reconnects with exponential backoff (1 s up to 30 s), receives a fresh `snapshot`, and re-fetches the open note with `get`. Deploys restart the object, so this path is exercised routinely.
+
+**Sign-out and revocation.** `POST /api/auth/logout` deletes the session row and closes that session's sockets via `getWebSockets("session:<hash-prefix>")`. Disabling a member closes all of their sockets via the `member:<id>` tag.
 
 ---
 
 ## 3. Data model
 
-A single DynamoDB table, `ColoTable`, holding two item types: members and notes. Single-table design here is not about scale — it keeps everything inside one table's provisioned capacity so the free tier covers it.
+All data lives in the Workspace Durable Object's embedded SQLite database. There is one workspace (`default`), and every member can read and edit every note — §1.2 rules out sharing beyond the two-person pool, so per-note permissions would be complexity without a use (D7).
 
-**Access model: one shared workspace.** §1.2 rules out sharing with anyone outside the two-user pool, so every note is visible to, and editable by, every member. Permission therefore lives at workspace level: a user may act on any note if and only if a Member item exists for their Cognito `sub`. There are no per-note membership records. v1 has exactly one workspace, `default`; resolvers receive its ID as an AppSync environment variable rather than hardcoding it. Per-note sharing can be added later (D7).
+### 3.1 Schema
 
-### 3.1 Key schema
+```sql
+-- Migration 1 (PRAGMA user_version = 1)
+CREATE TABLE members (
+  id            TEXT PRIMARY KEY,                -- ULID
+  email         TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  display_name  TEXT NOT NULL,
+  created_at    TEXT NOT NULL,
+  disabled_at   TEXT
+);
 
-| Attribute | Role |
-|---|---|
-| `PK` (partition key) | `WS#<workspaceId>` for members, `NOTE#<noteId>` for notes |
-| `SK` (sort key) | `MEMBER#<cognitoSub>` for members, `META` for notes |
-| `GSI1PK` | `WS#<workspaceId>#NOTES` on live notes only; removed on soft delete, so GSI1 is a sparse index of live notes |
-| `GSI1SK` | `<updatedAt>#<noteId>` — orders the list by last edit |
+CREATE TABLE passkeys (
+  credential_id TEXT PRIMARY KEY,                -- base64url
+  member_id     TEXT NOT NULL REFERENCES members(id),
+  public_key    BLOB NOT NULL,
+  counter       INTEGER NOT NULL DEFAULT 0,
+  transports    TEXT,                            -- JSON array
+  created_at    TEXT NOT NULL,
+  last_used_at  TEXT
+);
+CREATE INDEX passkeys_by_member ON passkeys(member_id);
 
-### 3.2 Item shapes
+CREATE TABLE invites (
+  token_hash    TEXT PRIMARY KEY,                -- SHA-256 of the token; the token itself is never stored
+  member_id     TEXT NOT NULL REFERENCES members(id),
+  expires_at    TEXT NOT NULL,                   -- 24 hours after creation
+  used_at       TEXT
+);
 
-**Member item** — one per person allowed into the workspace. The admin seed script (§8.2) writes it right after creating the Cognito user; its presence *is* the permission.
+CREATE TABLE sessions (
+  id_hash       TEXT PRIMARY KEY,                -- SHA-256 of the cookie value
+  member_id     TEXT NOT NULL REFERENCES members(id),
+  created_at    TEXT NOT NULL,
+  expires_at    TEXT NOT NULL,                   -- 30 days, sliding
+  last_seen_at  TEXT NOT NULL
+);
 
-```json
-{
-  "PK":          "WS#default",
-  "SK":          "MEMBER#e4f1a2c0-...",
-  "type":        "Member",
-  "sub":         "e4f1a2c0-...",
-  "email":       "you@example.com",
-  "displayName": "Alex",
-  "addedAt":     "2026-09-13T09:05:10Z"
-}
+CREATE TABLE auth_challenges (
+  id            TEXT PRIMARY KEY,
+  challenge     TEXT NOT NULL,
+  purpose       TEXT NOT NULL CHECK (purpose IN ('register', 'login')),
+  member_id     TEXT,                            -- set for registration
+  expires_at    TEXT NOT NULL                    -- 5 minutes after creation
+);
+
+CREATE TABLE notes (
+  id            TEXT PRIMARY KEY,                -- ULID
+  title         TEXT NOT NULL,
+  body          TEXT NOT NULL DEFAULT '',
+  version       INTEGER NOT NULL DEFAULT 1,
+  created_at    TEXT NOT NULL,
+  created_by    TEXT NOT NULL REFERENCES members(id),
+  updated_at    TEXT NOT NULL,
+  updated_by    TEXT NOT NULL REFERENCES members(id),
+  deleted_at    TEXT                             -- NULL on live notes
+);
+CREATE INDEX notes_live_by_updated ON notes(deleted_at, updated_at);
 ```
 
-**Note item** — the note itself.
+Notes on the design:
 
-```json
-{
-  "PK":            "NOTE#01J8XK2M4A",
-  "SK":            "META",
-  "GSI1PK":        "WS#default#NOTES",
-  "GSI1SK":        "2026-09-13T11:31:02Z#01J8XK2M4A",
-  "type":          "Note",
-  "noteId":        "01J8XK2M4A",
-  "workspaceId":   "default",
-  "title":         "Groceries",
-  "body":          "milk\neggs\n...",
-  "version":       7,
-  "createdAt":     "2026-09-13T09:12:44Z",
-  "createdBy":     "e4f1a2c0-...",
-  "updatedAt":     "2026-09-13T11:31:02Z",
-  "updatedBy":     "9b7d3e11-...",
-  "updatedByName": "Sam",
-  "lastOriginId":  "5f0c8a4e-..."
-}
-```
+- **Display names come from a join** (`notes.updated_by → members.display_name`), so renaming a member updates every "last edited by" automatically.
+- **Challenges are stored rows**, not signed cookies, so the app needs no signing secret. Expired challenges, invites and sessions are deleted opportunistically during auth calls; no scheduled job is needed.
+- **Sessions slide** by extending `expires_at` at most once a day per session, to avoid a write on every request.
 
-- `deletedAt` is **absent** on live notes rather than `null`, so conditions can use `attribute_not_exists(deletedAt)`.
-- `updatedByName` is copied from the editor's Member item at write time, so "last edited by" (F7) needs no extra lookup. If someone changes their display name, older notes keep the old one.
-- `lastOriginId` identifies the browser tab that made the last write, for echo suppression (§2.3). The API exposes it as `Note.originId`.
+### 3.2 Access patterns
 
-### 3.3 Access patterns
-
-| Pattern | Operation |
+| Pattern | Query |
 |---|---|
-| Authorize caller | `GetItem PK = WS#<ws>, SK = MEMBER#<sub>` — first step of every resolver; also yields `displayName` |
-| List notes, newest first | `Query GSI1 where GSI1PK = WS#<ws>#NOTES`, `ScanIndexForward = false` |
-| Fetch one note | `GetItem PK = NOTE#<id>, SK = META`; return `null` if `deletedAt` is set |
-| Create note | `PutItem` with `ConditionExpression: attribute_not_exists(PK)` |
-| Update note | `UpdateItem` with `ConditionExpression: version = :expected AND attribute_not_exists(deletedAt)`; also refreshes `GSI1SK` |
-| Delete note | `UpdateItem` setting `deletedAt` and `REMOVE GSI1PK` — the note leaves the list index but the item stays for recovery |
+| Authenticate a request | `SELECT … FROM sessions JOIN members … WHERE id_hash = ? AND expires_at > now AND disabled_at IS NULL` |
+| List notes, newest first | `SELECT id, title, version, updated_at, updated_by FROM notes WHERE deleted_at IS NULL ORDER BY updated_at DESC` |
+| Fetch one note | `SELECT … FROM notes WHERE id = ? AND deleted_at IS NULL` |
+| Create note | `INSERT INTO notes …` |
+| Update note | `UPDATE notes SET …, version = version + 1 WHERE id = ? AND version = ? AND deleted_at IS NULL` |
+| Delete note | `UPDATE notes SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL` |
+| Find passkey at login | `SELECT … FROM passkeys WHERE credential_id = ?` |
 
-GSI1 is eventually consistent, so a note created or edited a moment ago can be missing from, or out of order in, an immediate `listNotes`. The list subscription (§4.1) delivers the change directly, so the UI does not depend on the index catching up.
+### 3.3 Migrations
 
-### 3.4 Capacity mode — important for staying free
+The object's constructor runs pending migrations inside `ctx.blockConcurrencyWhile()`, comparing `PRAGMA user_version` against the list in `src/worker/db.ts`; each migration runs in `ctx.storage.transactionSync()`. Migrations are forward-only and **additive** (new tables, new nullable columns) so that `wrangler rollback` to the previous code version keeps working against a newer schema (§8.5).
 
-The always-free DynamoDB allowance is **25 GB of storage plus 25 write capacity units and 25 read capacity units**, and those WCU/RCU figures apply to **provisioned** capacity mode. On-demand mode is billed per request from the first request (storage still falls under the free 25 GB).
+### 3.4 Storage and row budget
 
-At two users the per-request cost of on-demand would be trivially small, but since provisioned mode is free and the traffic is utterly predictable, configure the table as:
-
-- Table: 5 RCU / 5 WCU provisioned, no auto-scaling (or auto-scaling capped at 10)
-- GSI1: 5 RCU / 5 WCU — **GSI capacity is charged separately and counts toward the same 25**, bringing the total to 10 RCU / 10 WCU
-
-That leaves comfortable headroom under the free allowance. Enable point-in-time recovery (PITR) for backup; note that PITR is billed on storage size and is *not* in the free tier, though at a few MB of notes it rounds to roughly a cent a month.
+The Free plan allows 5 GB of Durable Object storage in total and 1 GB per object — thousands of times what two people's text notes need. Every row written counts toward the 100,000 rows/day allowance, and **each index row updated counts as an additional row**. An autosave updates the note row plus the `notes_live_by_updated` index, so roughly 2–3 rows per save; §9 shows the resulting headroom.
 
 ---
 
-## 4. API design (AppSync GraphQL)
+## 4. API design
 
-### 4.1 Schema
+The Worker forwards every `/api/*` request to the Workspace Durable Object. Requests use JSON; note operations travel over the WebSocket.
 
-```graphql
-type Member {
-  sub: ID!
-  displayName: String!
-  email: AWSEmail!
-}
+### 4.1 HTTP endpoints
 
-type Note {
-  noteId: ID!
-  workspaceId: ID!
-  title: String!
-  body: String!
-  version: Int!
-  createdAt: AWSDateTime!
-  createdBy: ID!
-  updatedAt: AWSDateTime!
-  updatedBy: ID!
-  updatedByName: String!
-  originId: ID              # tab that made the last write (stored as lastOriginId)
-  deletedAt: AWSDateTime    # set only on soft-deleted notes
-}
+| Method and path | Auth | Purpose |
+|---|---|---|
+| `GET /api/health` | None | Liveness check (returns object location and schema version) |
+| `GET /api/me` | Session | Current member; `401` if not signed in |
+| `POST /api/admin/invites` | `Authorization: Bearer <ADMIN_TOKEN>` | Create member (if new) and a one-time invite link. Returns `404` when `ADMIN_TOKEN` is not set |
+| `POST /api/auth/register/options` | Invite token in body | WebAuthn creation options + challenge ID |
+| `POST /api/auth/register/verify` | Invite token + challenge ID | Store passkey, consume invite, set session cookie |
+| `POST /api/auth/login/options` | None | WebAuthn request options + challenge ID |
+| `POST /api/auth/login/verify` | Challenge ID | Verify assertion, set session cookie |
+| `POST /api/auth/logout` | Session | Delete session, close its sockets, clear cookie |
+| `GET /api/export` | Session | Download all notes (including soft-deleted) and member names as JSON |
+| `GET /api/ws` | Session | WebSocket upgrade |
 
-type Query {
-  me: Member!
-  listNotes(limit: Int = 50, nextToken: String): NoteConnection!
-  getNote(noteId: ID!): Note
-}
+Every `POST` and the WebSocket upgrade must carry an `Origin` header equal to the configured `ORIGIN`; anything else is rejected with `403`.
 
-type Mutation {
-  createNote(title: String!, body: String = "", originId: ID!): Note!
-  updateNote(
-    noteId: ID!
-    title: String
-    body: String
-    expectedVersion: Int!
-    originId: ID!
-  ): Note!
-  deleteNote(noteId: ID!, originId: ID!): Note!
-}
+### 4.2 WebSocket protocol
 
-type Subscription {
-  onNoteChanged(noteId: ID!): Note
-    @aws_subscribe(mutations: ["updateNote", "deleteNote"])
-  onNoteListChanged: Note
-    @aws_subscribe(mutations: ["createNote", "updateNote", "deleteNote"])
-}
+Messages are JSON objects with a `type` field; types are shared between client and server in `src/shared/protocol.ts` and validated on the server.
 
-type NoteConnection {
-  items: [Note!]!
-  nextToken: String
-}
-```
+**Client → server**
 
-- **Subscribers only receive fields the triggering mutation selected.** The client therefore uses one shared `NoteFields` fragment — including `originId`, `updatedByName` and `deletedAt` — on every mutation, query and subscription.
-- `onNoteListChanged` also fires on `updateNote`, so the other person's list re-sorts when a note is edited.
-- `deleteNote` returns the note with `deletedAt` set, so subscribers can tell a delete from an edit.
+| Type | Fields | Result |
+|---|---|---|
+| `get` | `reqId`, `noteId` | `ack` with the full note, or `error NOT_FOUND` |
+| `create` | `reqId`, `title` | `ack` to sender, `changed` to others |
+| `update` | `reqId`, `noteId`, `title?`, `body?`, `expectedVersion` | `ack` + `changed`, or `error CONFLICT` with `current` |
+| `delete` | `reqId`, `noteId` | `ack` + `changed` (note carries `deletedAt`) |
+| `viewing` | `noteId` or `null` | `presence` broadcast |
+| `"ping"` (plain text) | — | `"pong"`, answered by the runtime without waking the object |
 
-### 4.2 Authorization
+**Server → client**
 
-Default authorization mode: **Amazon Cognito User Pools**. Every field requires a valid ID token; there is no API-key or IAM path exposed publicly. AppSync validates the JWT signature and expiry against the User Pool before a resolver ever runs, so unauthenticated traffic is rejected at the API boundary at no compute cost.
+| Type | Fields | When |
+|---|---|---|
+| `snapshot` | `me`, `members`, `notes` (summaries, no bodies) | Immediately after connecting |
+| `ack` | `reqId`, `note` | Successful request |
+| `error` | `reqId`, `code` (`CONFLICT`, `NOT_FOUND`, `INVALID`, `RATE_LIMITED`, `UNAUTHORIZED`), `current?` | Failed request |
+| `changed` | `note`, `byName` | Another socket changed a note |
+| `presence` | `online` (member IDs), `viewing` (member ID → note ID) | Connect, disconnect, `viewing` |
 
-A valid token is not enough: every operation also requires **workspace membership**, enforced inside pipeline resolvers rather than trusted from the client.
+### 4.3 Authorization and limits
 
-- **Queries and mutations** are two-step pipelines. A shared `requireMember` function reads `WS#<WORKSPACE_ID> / MEMBER#<ctx.identity.sub>`. It fails with `Unauthorized` if the item is missing, and otherwise puts the member in `ctx.stash` for the second step, which performs the operation. A Cognito user without a Member item can sign in but cannot read or write anything.
-- **Subscriptions** get a resolver that runs when a client subscribes, using the same `requireMember` check. Without it, any signed-in user could subscribe to any `noteId`, because by default AppSync checks only the token for subscriptions.
-- **Conflicts:** when `updateNote`'s condition fails, the resolver returns error type `ConflictError`; the client refetches the note and shows the conflict banner instead of overwriting.
-
-### 4.3 Resolver strategy
-
-Prefer **direct DynamoDB resolvers** (AppSync JavaScript resolvers) for all six queries and mutations and both subscription checks — no Lambda in the hot path, which means no cold starts on the critical read path and no Lambda invocations counted at all. The table name and workspace ID reach resolvers as AppSync environment variables. Reach for a Lambda resolver only if something genuinely needs it, for example a future "merge two notes" operation or an export-to-file job.
-
-### 4.4 Phase 4 addition (only if Tier B co-editing is built)
-
-```graphql
-type EditDelta {
-  noteId: ID!
-  update: String!      # base64-encoded Yjs binary update
-  originId: ID!
-  sentAt: AWSDateTime!
-}
-
-type Mutation {
-  publishDelta(noteId: ID!, update: String!, originId: ID!): EditDelta!
-}
-
-type Subscription {
-  onDelta(noteId: ID!): EditDelta @aws_subscribe(mutations: ["publishDelta"])
-}
-```
-
-Both new fields use the same `requireMember` check as everything else. Deltas are ephemeral broadcast traffic and need not be persisted; the debounced `updateNote` continues to write the authoritative snapshot to DynamoDB. Two caveats to validate before committing to this design: AppSync caps subscription payload size, so large pastes must be chunked or routed through an S3 side-channel, and per-keystroke mutations would multiply the operation count — batch deltas on a short timer (~200 ms) rather than sending one per keypress.
+- **Session on connect, attachment afterwards.** The session is checked when the socket opens. Afterwards the object trusts the socket's attachment until `sessionExpiresAt`, then closes it with code `4001` so the client re-authenticates. Logout and member disabling close sockets immediately (§2.3), so no per-message database read is needed.
+- **Rate cap.** Each socket may send at most 20 messages per 10 seconds; excess messages get `error RATE_LIMITED` and are not processed. This bounds the damage of a client bug to a small fraction of the daily free allowance.
+- **Size cap.** Note bodies are limited to 512 KB and titles to 200 characters; larger values get `error INVALID`.
+- **Hibernation-friendly code.** The object keeps no in-memory timers or intervals, which would prevent hibernation. Rate-limit counters live in the socket attachment; heartbeats use `ctx.setWebSocketAutoResponse()`.
 
 ---
 
 ## 5. Authentication design
 
-**User Pool configuration**
+**Passkeys (WebAuthn), invite-only.** Passkeys are phishing-resistant, need no password storage, and verifying one is a cheap signature check. Library: `@simplewebauthn/server` in the Durable Object and `@simplewebauthn/browser` in the SPA.
 
-- Sign-in alias: email. Case-insensitive.
-- **Self-registration disabled.** Both accounts are created by admin action — this is the single most effective control for a two-person app on a public URL.
-- Password policy: minimum 12 characters, no forced rotation, no composition rules beyond length (aligned with current NIST guidance).
-- MFA: optional TOTP, strongly recommended for the owner account.
-- Account recovery: email only.
-- Advanced security features: leave off — they are billed per MAU above the base tier and add nothing at two users.
-
-**App client**
-
-- Public client, **no client secret** (a secret cannot be kept secret in a browser bundle).
-- Auth flow: `ALLOW_USER_SRP_AUTH` + `ALLOW_REFRESH_TOKEN_AUTH`. Explicitly disable `ALLOW_USER_PASSWORD_AUTH`.
-- Token validity: ID and access tokens 1 hour; refresh token 30 days.
-- Token storage: in-memory plus `localStorage` for the refresh token, which is the standard Amplify behaviour and an acceptable trade-off for a personal tool. Anyone wanting stricter handling should note that eliminating `localStorage` entirely requires a backend-for-frontend with httpOnly cookies — disproportionate here.
-
-**Frontend integration:** AWS Amplify's auth library, which handles the SRP handshake, token refresh, and the hosted-UI-free custom sign-in form. Total integration surface is roughly 60 lines.
+- **Relying party.** `RP_ID` is the full hostname `colo.<subdomain>.workers.dev`; `ORIGIN` is `https://` plus that. Locally both use `localhost`, which browsers treat as a secure context.
+- **Registration options.** Discoverable credential required (enables username-less sign-in), user verification required, attestation `none`, algorithms ES256 and RS256 (Windows Hello uses RS256).
+- **Counters.** Many synced passkeys always report a counter of `0`; the server accepts `0` but rejects a counter that goes backwards once it is non-zero.
+- **Invites.** 32 random bytes, base64url, delivered in the URL fragment, single use, valid for 24 hours, stored only as a SHA-256 hash.
+- **Sessions.** Cookie `__Host-colo_session` holding 32 random bytes; attributes `HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=2592000`. Only the SHA-256 hash is stored. 30-day sliding expiry.
+- **CSRF and cross-site WebSocket hijacking.** `SameSite=Strict` plus the `Origin` check on every `POST` and on the WebSocket upgrade.
+- **Admin token.** `ADMIN_TOKEN` is a Worker secret (≥ 32 random bytes) used only to create invites, compared in constant time. After both users are enrolled, delete it (`wrangler secret delete ADMIN_TOKEN`); the invite endpoint then returns `404` until the secret is set again.
+- **More devices.** Synced passkeys (iCloud Keychain, Google Password Manager, 1Password and similar) usually cover a person's devices. Otherwise the admin issues a fresh invite for the existing email, which adds another passkey to the same member.
+- **Recovery.** Same as adding a device: a new invite for the existing member. Old passkeys can be removed from the member's settings (M4).
+- **Runtime check.** SimpleWebAuthn's documentation lists Node 22+ and Deno 2.4+ but not Workers. The first task of M1 is a spike confirming it runs in workerd (with the `nodejs_compat` flag if needed). Fallback: verify ES256/RS256 assertions directly with WebCrypto, which Workers support natively.
+- **Hostname-bound passkeys.** Passkeys only work on the hostname they were created for. Moving to a custom domain later (D4) means both users enroll new passkeys through fresh invites — a two-minute job at this scale, but worth knowing before choosing the `workers.dev` subdomain.
 
 ---
 
@@ -311,86 +295,115 @@ Both new fields use the same `requireMember` check as everything else. Deltas ar
 
 | Choice | Selection | Rationale |
 |---|---|---|
-| Framework | React 19 + TypeScript | Best-supported path for both Amplify and Yjs bindings |
-| Build tool | Vite | Fast builds, trivial static output |
-| Auth SDK | `aws-amplify/auth` | Handles SRP + refresh |
-| API client | `aws-amplify/api` (GraphQL) | Built-in subscription handling over AppSync's WebSocket protocol |
+| Framework | React 19 + TypeScript | Well supported; matches Tier B editor bindings |
+| Build tool | Vite + `@cloudflare/vite-plugin` | `vite dev` runs the Worker and Durable Object in workerd locally; one package for client and server |
+| Auth | `@simplewebauthn/browser` | Passkey prompts across browsers |
+| Realtime client | Small WebSocket wrapper (~150 lines) | Reconnect with backoff, `"ping"` every 30 s, request/`ack` matching by `reqId`, resync on reconnect |
+| State | React state + a small external store (`useSyncExternalStore`) | No state library needed for one list and one open note |
 | Editor (v1) | Controlled `<textarea>` with Markdown preview | Minimal; sufficient for Tier A |
-| Editor (Phase 4) | Tiptap/ProseMirror + `y-prosemirror` | Only if Tier B co-editing is built |
-| Styling | Plain CSS or Tailwind | Either; no strong constraint |
+| Markdown | `marked` + `DOMPurify` | Output is always sanitised before rendering |
+| Editor (M5) | CodeMirror 6 + `y-codemirror.next` | Only if Tier B is built; suits Markdown better than a rich-text editor |
+| Styling | Plain CSS | No build-time dependency needed |
 
-**SPA routing on CloudFront.** A client-routed app breaks on refresh unless CloudFront is told to serve `index.html` for unknown paths. Configure custom error responses mapping both **403** (S3's response for a missing key behind OAC) and **404** to `/index.html` with HTTP status **200**.
+**SPA routing.** `assets.not_found_handling = "single-page-application"` serves `index.html` for unknown paths such as `/invite` or `/notes/<id>`.
 
-**Cache strategy.** Vite emits content-hashed filenames, so:
-- `index.html` → `Cache-Control: no-cache` (always revalidate)
-- `/assets/*` → `Cache-Control: public, max-age=31536000, immutable`
+**Headers for static assets** come from `public/_headers`:
 
-With that split, a deploy only needs an invalidation of `/index.html`, keeping invalidation counts well inside the free allowance.
+```
+/*
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: same-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=()
+
+/index.html
+  Cache-Control: no-cache
+
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+```
+
+`_headers` does not apply to responses generated by Worker code, so the Worker adds the same security headers to `/api` responses itself (except `101` WebSocket upgrades). HTTPS is enforced for the whole `.dev` top-level domain by browsers' HSTS preload list.
 
 ---
 
-## 7. Infrastructure as code
+## 7. Project structure and configuration
 
-**Tooling: AWS CDK v2 (TypeScript).** The alternatives are worth naming: SAM is lighter but weaker at wiring AppSync and Cognito together; Terraform is excellent but adds a state backend to manage; the Amplify CLI is fastest to start but generates infrastructure that is awkward to customise later. CDK keeps the whole stack in the same language as the frontend and produces plain CloudFormation.
-
-Everything lives in **one stack** — at this size, splitting into separate stacks buys nothing and costs cross-stack reference headaches.
+**One npm package, no workspaces.** The Vite plugin builds the client and the Worker together.
 
 ```
 colo/
-  package.json            # npm workspaces: infra, web
-  docs/colo-plan.md
+  package.json              # scripts: dev, build, test, deploy, invite
+  wrangler.jsonc
+  vite.config.ts
+  tsconfig.json
+  index.html
+  public/
+    _headers
+  src/
+    client/                 # React SPA: main.tsx, App.tsx, ws.ts, auth.ts, editor/
+    worker/
+      index.ts              # router: /api/* -> Workspace Durable Object
+      workspace.ts          # Workspace Durable Object class
+      auth.ts               # invites, passkeys, sessions
+      notes.ts              # note operations
+      db.ts                 # migrations
+    shared/
+      protocol.ts           # WebSocket message types
   scripts/
-    add-member.ts         # admin: create Cognito user + Member item
-  infra/
-    bin/app.ts
-    lib/
-      colo-stack.ts       # the single stack
-      constructs/
-        auth.ts           # Cognito user pool + app client
-        data.ts           # DynamoDB table + GSI1
-        api.ts            # AppSync API, schema, resolvers
-        web.ts            # S3 bucket, OAC, CloudFront distribution
-    graphql/
-      schema.graphql
-      resolvers/*.js      # AppSync JS resolvers (requireMember + one per operation)
-  web/                    # Vite + React SPA
+    invite.ts               # calls POST /api/admin/invites
+  test/                     # vitest + @cloudflare/vitest-pool-workers
+  docs/
+    colo-plan.md
+    decisions/
 ```
 
-Illustrative sketch of the web construct:
+**`wrangler.jsonc` sketch** (confirm key names against the current Wrangler schema during M0):
+
+```jsonc
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "colo",
+  "main": "src/worker/index.ts",
+  "compatibility_date": "2026-09-01",
+  "workers_dev": true,
+  "preview_urls": false,
+  "assets": {
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "WORKSPACE", "class_name": "Workspace" }]
+  },
+  "exports": {
+    "Workspace": { "type": "durable-object", "storage": "sqlite" }
+  },
+  "vars": {
+    "RP_ID": "colo.<subdomain>.workers.dev",
+    "ORIGIN": "https://colo.<subdomain>.workers.dev"
+  },
+  "observability": { "enabled": true, "head_sampling_rate": 1 }
+}
+```
+
+- **SQLite storage is mandatory** on the Free plan; key-value-backed Durable Objects are not available.
+- **`preview_urls: false`** makes explicit what Cloudflare already does for Workers with Durable Objects.
+- Local overrides (`RP_ID=localhost`, `ORIGIN=http://localhost:5173`, a local `ADMIN_TOKEN`) go in `.dev.vars`, which is git-ignored.
+
+**Worker sketch:**
 
 ```ts
-const bucket = new s3.Bucket(this, 'SiteBucket', {
-  blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
-  encryption: s3.BucketEncryption.S3_MANAGED,
-  enforceSSL: true,
-  removalPolicy: RemovalPolicy.RETAIN,
-});
+export { Workspace } from "./workspace";
 
-const distribution = new cloudfront.Distribution(this, 'Cdn', {
-  defaultRootObject: 'index.html',
-  defaultBehavior: {
-    origin: origins.S3BucketOrigin.withOriginAccessControl(bucket),
-    viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
-    cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
-    responseHeadersPolicy:
-      cloudfront.ResponseHeadersPolicy.SECURITY_HEADERS,
+export default {
+  async fetch(request, env) {
+    const id = env.WORKSPACE.idFromName("default");
+    const stub = env.WORKSPACE.get(id, { locationHint: "apac" });
+    const response = await stub.fetch(request);
+    return response.webSocket ? response : withSecurityHeaders(response);
   },
-  errorResponses: [
-    { httpStatus: 403, responseHttpStatus: 200, responsePagePath: '/index.html' },
-    { httpStatus: 404, responseHttpStatus: 200, responsePagePath: '/index.html' },
-  ],
-});
+} satisfies ExportedHandler<Env>;
 ```
-
-**Required stack outputs** — these are what the frontend build consumes:
-
-| Output | Consumed by |
-|---|---|
-| `UserPoolId`, `UserPoolClientId` | Amplify auth config |
-| `GraphQlApiUrl`, `GraphQlRealtimeUrl` | Amplify API config |
-| `DistributionDomainName` | The app's URL |
-| `SiteBucketName`, `DistributionId` | Deploy script (sync + invalidate) |
-| `AwsRegion` | Both |
 
 ---
 
@@ -398,122 +411,95 @@ const distribution = new cloudfront.Distribution(this, 'Cdn', {
 
 ### 8.1 Prerequisites
 
-AWS account with admin credentials configured locally as a named CLI profile, AWS CLI v2, and Node.js 22+ (Node 20 reached end of life in April 2026). AWS CDK v2 is a dev dependency of `infra/` and runs via `npx cdk`, so no global install is needed. One-time per account/region: `cdk bootstrap aws://<account-id>/<region>`.
-
-**Account plan.** If the AWS account was created on or after 15 July 2025, it must be on the **Paid plan**, not the Free plan. A Free plan account closes automatically six months after it is opened, or sooner if its credits run out; AWS then deletes its resources after 90 days unless it is upgraded. That is fatal for an app meant to run indefinitely. Upgrading keeps any unused credits, and the always-free allowances in §9.1 apply on both plans. Accounts created before that date are on the legacy free tier and need no plan change.
-
-Pick a single region and stay in it — `ap-south-1` (Mumbai) is the sensible default given the user location; CloudFront is global regardless, so the region choice only affects API and database latency.
+- A free Cloudflare account. No payment method is needed, and leaving none attached is what guarantees the $0 bill.
+- Node.js 22+ (the repo pins 24 in `.nvmrc`). Wrangler is a dev dependency, run via `npx wrangler`.
+- A passkey-capable device for each user: any current phone, or a laptop with Touch ID / Windows Hello / a password manager.
+- **Choose the account's `workers.dev` subdomain before anyone enrolls a passkey.** The app URL becomes `colo.<subdomain>.workers.dev`, and passkeys are bound to it (§5).
 
 ### 8.2 First deployment — ordered steps
 
 ```bash
-# 1. Install dependencies (npm workspaces) and provision all infrastructure
+# 1. Install and authenticate
 npm ci
-cd infra
-npx cdk deploy ColoStack --outputs-file ../web/src/aws-outputs.json
-cd ..
+npx wrangler login
 
-# 2. Create the two users and add them to the workspace (invite-only, admin-driven).
-#    The script runs cognito-idp admin-create-user (Cognito emails a temporary
-#    password), reads the new user's sub, and writes the WS#default / MEMBER#<sub> item.
-npx tsx scripts/add-member.ts --email you@example.com --name "Alex"
-# repeat for the second user
+# 2. Build and deploy the Worker, Durable Object and static assets
+npm run deploy                     # vite build && wrangler deploy
+curl https://colo.<subdomain>.workers.dev/api/health
 
-# 3. Build the frontend against the real stack outputs
-cd web
-npm run build
+# 3. Set the admin secret (keep a copy in your password manager)
+openssl rand -base64 32 | npx wrangler secret put ADMIN_TOKEN
 
-# 4. Publish static assets
-aws s3 sync dist/ s3://<SiteBucketName>/ --delete \
-  --cache-control "public,max-age=31536000,immutable" \
-  --exclude index.html
-aws s3 cp dist/index.html s3://<SiteBucketName>/index.html \
-  --cache-control "no-cache"
+# 4. Invite both users; each command prints a one-time link valid for 24 hours
+COLO_ADMIN_TOKEN=<token> npm run invite -- --email you@example.com --name "Alex"
+COLO_ADMIN_TOKEN=<token> npm run invite -- --email them@example.com --name "Sam"
 
-# 5. Invalidate the HTML entry point only
-aws cloudfront create-invalidation \
-  --distribution-id <DistributionId> --paths "/index.html"
+# 5. After both passkeys are enrolled, disable invites
+npx wrangler secret delete ADMIN_TOKEN
 ```
-
-The app is then live at `https://<DistributionDomainName>/`. Initial CloudFront propagation takes a few minutes on first creation.
 
 ### 8.3 Routine deploys
 
-Infrastructure changes: `cdk deploy`. Frontend-only changes: steps 3–5 above, wrapped in an `npm run deploy` script. Because assets are content-hashed, a frontend deploy is effectively atomic — new bundles upload first, and the `index.html` swap is what flips users to the new version.
+`npm run deploy` uploads the Worker, the Durable Object class and the static assets as one new version. Deploying restarts the Durable Object, which closes open WebSockets; clients reconnect and resync automatically (§2.3). Pending schema migrations run when the object restarts.
 
-### 8.4 CI/CD (recommended, not required for v1)
+### 8.4 CI/CD (M4)
 
-GitHub Actions on push to `main`, authenticating via **OIDC** so no long-lived AWS access keys are ever stored in GitHub:
+Push the repo to a private GitHub repository and connect it with **Workers Builds**: build command `npm ci && npm test && npm run build`, deploy command `npx wrangler deploy`, production branch `main`. The Free plan includes 3,000 build minutes a month with one concurrent build and a 20-minute timeout. Because Cloudflare pulls from GitHub, no Cloudflare API token has to be stored as a GitHub secret.
 
-```yaml
-permissions:
-  id-token: write
-  contents: read
+### 8.5 Rollback and restore
 
-steps:
-  - uses: actions/checkout@v4
-  - uses: actions/setup-node@v4
-    with: { node-version: 24, cache: npm }
-  - uses: aws-actions/configure-aws-credentials@v4
-    with:
-      role-to-assume: arn:aws:iam::<account-id>:role/GitHubDeployRole
-      aws-region: ap-south-1
-  - run: npm ci && npm run build --workspace web
-  - run: npm run deploy --workspace web
-```
-
-The IAM role trusts GitHub's OIDC provider, scoped to this specific repository and the `main` branch, with permissions limited to CDK deployment plus `s3:PutObject` on the site bucket and `cloudfront:CreateInvalidation` on the one distribution.
-
-### 8.5 Rollback
-
-Frontend: re-sync the previous build output and invalidate — under a minute. Infrastructure: `cdk deploy` from the previous commit, or CloudFormation's automatic rollback on a failed update. Data: PITR restore to a timestamp, which creates a new table that then needs swapping in — slow and manual, but this is a notes app for two people, not a payments system.
+- **Code:** `npx wrangler rollback` returns to the previous version in seconds. Because migrations are additive-only (§3.3), older code keeps working against the newer schema.
+- **Data:** the member-only `/api/export` endpoint downloads everything as JSON; take one before risky changes. Durable Object SQLite also offers point-in-time recovery over the last 30 days (`getBookmarkForTime` / `onNextSessionRestoreBookmark`), but Cloudflare's documentation does not state whether it is available on the Free plan — verify during M4 before relying on it.
 
 ---
 
 ## 9. Cost model
 
-### 9.1 Free tier status per service
+### 9.1 Plan
 
-Four of the six services have always-free allowances that apply to every AWS account, whatever its age or plan. S3 and AppSync do not, and in practice they are billed from day one:
+Colo runs on the **Workers Free plan** with no payment method attached: **$0/month, and no way to be charged.** Free limits are daily and reset at 00:00 UTC. When one is exceeded, further operations of that type fail with errors until the reset — the app goes down, it does not run up a bill.
 
-| Account created | S3 and AppSync |
-|---|---|
-| **Before 15 July 2025** (legacy free tier) | They had a 12-month trial allowance counted from account creation. Every such trial ended by 15 July 2026 at the latest, so these accounts pay §9.2 rates now. |
-| **On or after 15 July 2025** (credit-based free tier) | The 12-month trials do not exist. Usage is billed at standard rates and deducted from the $100–$200 sign-up credits. Credits expire 12 months after account creation; after that, §9.2 rates apply. |
+The only ways money could ever be involved are deliberate: upgrading to Workers Paid (a $5/month minimum) or registering a custom domain (D4).
 
-Either way, the realistic cost is the few cents a month in §9.2 — it is just not $0.
+### 9.2 Free allowances vs. expected use
 
-| Service | Free allowance | Type | Expected use at 2 users |
-|---|---|---|---|
-| CloudFront | 1 TB data out + 10,000,000 requests/mo | **Always free** | A few hundred requests, well under 1 GB |
-| DynamoDB | 25 GB + 25 WCU + 25 RCU | **Always free** | <10 MB, <5 WCU/RCU |
-| Cognito | 10,000 MAU (Essentials/Lite) | **Always free** (explicitly does not expire at 12 months) | 2 MAU |
-| Lambda | 1,000,000 requests + 400,000 GB-s/mo | **Always free** | Near zero — resolvers are direct to DynamoDB |
-| S3 | None usable (see above) | **Billed** — credit-covered on new accounts | ~5 MB of bundles; ~$0.01/mo |
-| AppSync | None usable (see above) | **Billed** — credit-covered on new accounts | Hundreds of ops; a few thousand connection-minutes |
+| Resource | Free allowance | Heavy day for two people |
+|---|---|---|
+| Static asset requests | Unlimited, free | Any number |
+| Worker requests | 100,000/day; 10 ms CPU each | A few hundred (auth calls, `/api/me`, WebSocket upgrades) |
+| Durable Object requests | 100,000/day; incoming WebSocket messages count 20:1 | ~5,000 autosaves + ~6,000 heartbeats ≈ 600 billed requests |
+| Durable Object duration | 13,000 GB-s/day; hibernated objects are not billed | Under 10,800 GB-s even if the object never hibernated all day |
+| SQLite rows read | 5,000,000/day | Tens of thousands at most |
+| SQLite rows written | 100,000/day (index rows count) | ~10,000–15,000 |
+| SQLite storage | 5 GB total; 1 GB per object | A few MB |
+| Workers Logs | 200,000 events/day; 3-day retention | A few thousand |
+| Workers Builds (M4) | 3,000 build minutes/month | About a minute per deploy |
 
-### 9.2 What S3 and AppSync actually cost
+The tightest limit is rows written: it would take on the order of 30,000+ autosaves in one day — many hours of continuous typing by both people — to reach it.
 
-These rates apply from the first deploy (offset by credits on a new account). AppSync's pay-as-you-go rates are $4.00 per million operations, $2.00 per million real-time updates, and $0.08 per million connection-minutes. Even a deliberately pessimistic month — say 20,000 operations, 20,000 real-time updates, and 10,000 connection-minutes — works out to roughly **$0.12**. S3 at this size lands near **$0.01**. Everything else stays $0 because those allowances never expire.
+### 9.3 Guardrails
 
-**Realistic steady-state cost: $0.00–0.25/month** — $0 on a new account until its credits are used up or expire. The one thing that could change that picture is a mistake rather than growth — an accidental infinite subscription loop, a runaway autosave firing per keystroke, or leaving a debug script running. Hence §9.3.
-
-### 9.3 Cost guardrails (do these on day one)
-
-1. **AWS Budgets alert at $1/month**, emailing on both actual and forecast breach. Two budget alerts are free. On a new account, **exclude credits** from the budget (and from any cost you review). Otherwise credits net the bill to $0, and a runaway stays invisible until the credits are gone.
-2. **Cost Anomaly Detection** enabled — free, and catches the shape of a runaway before the total looks alarming.
-3. **Debounce autosave** at 800 ms minimum and batch any Phase 4 deltas — the single largest realistic driver of AppSync operation count. Each `updateNote` publishes to both subscriptions, so autosave frequency drives real-time updates twice over.
-4. **CloudWatch log retention set to 7 days** on every log group. Default retention is "never expire", and accumulated logs are one of the few line items that quietly grows forever. The always-free CloudWatch allowance covers 5 GB of ingestion, but there is no reason to spend it.
+1. **Debounce autosave** at 800 ms minimum on the client.
+2. **Per-socket rate cap** of 20 messages per 10 seconds on the server (§4.3), so a runaway client cannot exhaust the daily allowances.
+3. **Hibernation-friendly Durable Object:** no in-memory timers; heartbeats answered by `setWebSocketAutoResponse()`.
+4. **Size caps** on note bodies and titles.
+5. **Check the Workers and Durable Objects metrics** in the dashboard monthly. If logs approach 200,000 events/day, lower `head_sampling_rate`.
 
 ---
 
 ## 10. Security posture
 
-The S3 bucket is fully private with public access blocked; CloudFront reaches it through Origin Access Control, so there is no public bucket URL to leak. All traffic is HTTPS-only, with HTTP redirected, and CloudFront's managed `SECURITY_HEADERS` policy supplies HSTS, `X-Content-Type-Options`, frame options, and a referrer policy.
+- **Sign-in:** invite-only passkeys — no passwords to steal, phish or stuff. Invite tokens are single use, expire after 24 hours, and are stored only as hashes. The admin secret is removed once both users are enrolled.
+- **Sessions:** random 256-bit cookie values stored as hashes, `__Host-` prefixed, `HttpOnly`, `Secure`, `SameSite=Strict`, revocable, and enforced on WebSocket upgrades as well as HTTP calls. `Origin` is checked on every state-changing request and on the upgrade.
+- **Surface:** the SPA shell on `workers.dev` is public but contains no data; every note operation requires a session. Preview URLs are disabled.
+- **Browser:** strict CSP, `frame-ancestors 'none'`, and sanitised Markdown rendering (`DOMPurify`), so note content cannot inject script.
+- **Data:** stored encrypted at rest by Cloudflare inside one Durable Object; backups via `/api/export` (and point-in-time recovery if confirmed on the Free plan).
 
-The API is closed by default — Cognito User Pool authorization on every field, self-registration disabled so the user pool cannot be joined by a stranger, and workspace-membership authorization enforced inside pipeline resolvers — including when a subscription opens — rather than trusted from the client. No IAM user access keys exist anywhere in the deployment path; local deploys use a named CLI profile and CI uses OIDC role assumption.
+**Residual risks:**
 
-Data is encrypted at rest by default in both S3 (SSE-S3) and DynamoDB (AWS-owned keys), which is adequate here; a customer-managed KMS key would add cost without a matching threat. PITR covers accidental deletion. The realistic residual risks are credential compromise of one of the two accounts — mitigated by the 12-character minimum and optional TOTP — and XSS in the note renderer, which is why any Markdown rendering must sanitise output (`dompurify` or a renderer with HTML disabled) rather than dangerously setting inner HTML.
+- **Authentication code is ours.** Mitigated by using SimpleWebAuthn for the cryptography, tests for invites, sessions and revocation, and a focused review in M1.
+- **A leaked `ADMIN_TOKEN` would let someone invite themselves.** Mitigated by deleting the secret after enrollment, and by the members list and presence showing any unexpected member.
+- **An unlocked device with a synced passkey grants access.** Mitigated by requiring user verification (biometric or device PIN) on every sign-in.
 
 ---
 
@@ -521,14 +507,14 @@ Data is encrypted at rest by default in both S3 (SSE-S3) and DynamoDB (AWS-owned
 
 | Milestone | Deliverable | Rough effort |
 |---|---|---|
-| **M0 — Skeleton** | Repo, CDK app, empty stack deploying cleanly; Vite app serving "hello" through CloudFront | Half a day |
-| **M1 — Auth** | Cognito pool, `add-member` script, both users created and added as workspace members, sign-in/sign-out working, protected route shell | Half a day |
-| **M2 — CRUD** | DynamoDB table + GSI1, AppSync schema, `requireMember` pipeline resolvers, list/create/edit/delete notes with autosave and optimistic concurrency | 1–2 days |
-| **M3 — Real time (Tier A)** | Both subscriptions wired with subscribe-time membership checks, echo suppression via `originId`, "last edited by" display, conflict banner on version mismatch | Half a day |
-| **M4 — Hardening** | Budget alerts, log retention, PITR, security headers verified, GitHub Actions OIDC pipeline | Half a day |
-| **M5 — Tier B (optional)** | Yjs + Tiptap, delta mutation/subscription, presence indicators | 2–3 days, only if M3 proves insufficient |
+| **M0 — Skeleton** | Vite + React + `@cloudflare/vite-plugin`; Worker router; empty Workspace Durable Object answering `/api/health`; `wrangler.jsonc`, `_headers`; deployed to `workers.dev` | Half a day |
+| **M1 — Passkey auth** | SimpleWebAuthn-in-workerd spike; auth tables and migrations; invite, register, login, logout; `scripts/invite.ts`; sign-in and invite screens; both users enrolled | 1–1.5 days |
+| **M2 — Notes** | Notes table; WebSocket connection with `snapshot`, `get`, `create`, `update`, `delete`; list and editor with autosave; conflict banner | 1 day |
+| **M3 — Real time** | `changed` broadcast; presence; heartbeat auto-response; reconnect and resync; per-socket rate cap; "last edited by" | 1 day |
+| **M4 — Hardening** | CSP and header check; `/api/export`; confirm Durable Object PITR on Free; session list and passkey removal; private GitHub repo + Workers Builds | Half a day |
+| **M5 — Tier B (optional)** | Yjs documents inside the Durable Object; CodeMirror 6 + `y-codemirror.next`; batched updates | 2–3 days, only if M3 proves insufficient |
 
-Ship M0–M4 first and use the app before deciding on M5. The decision gate is concrete: if you and your collaborator repeatedly hit "someone else changed this note" conflicts during real use, Tier B is justified; if not, it is complexity for its own sake.
+Ship M0–M4 first and use the app before deciding on M5. The decision gate is concrete: if the two of you repeatedly hit "someone else changed this note" conflicts in real use, Tier B is justified; if not, it is complexity for its own sake.
 
 ---
 
@@ -538,37 +524,45 @@ Ship M0–M4 first and use the app before deciding on M5. The decision gate is c
 |---|---|---|
 | D1 | Tier B live co-editing — build it? | No; revisit after two weeks of real M3 use |
 | D2 | Markdown rendering in the editor | Yes, with sanitised output |
-| D3 | Region | `ap-south-1` |
-| D4 | Custom domain later | Deferred; ~$12/yr domain + ~$0.50/mo hosted zone when wanted |
-| D5 | Note history / revisions | Deferred; the schema's `version` field leaves room to add an append-only revision item later |
-| D6 | Export / backup to file | Deferred; PITR covers disaster recovery in the meantime |
-| D7 | Per-note sharing or roles | Deferred; v1 shares every note with every workspace member. If needed, add `USER#<sub> / NOTE#<id>` membership items and a per-note check after `requireMember` |
-| D8 | Trash / restore UI for deleted notes | Deferred; soft-deleted items stay in the table, and an admin can restore one by removing `deletedAt` and re-adding `GSI1PK` |
+| D3 | Durable Object location | `locationHint: "apac"` on first creation; the object stays where it is created |
+| D4 | Custom domain | Deferred. Costs the registry price via Cloudflare Registrar (no markup). Would also allow hostname-based Cloudflare Access as an alternative login ([ADR 0002](decisions/0002-passkey-auth-on-workers-dev.md)); requires re-enrolling passkeys |
+| D5 | Note history / revisions | Deferred; a `note_revisions` table in the same object is cheap to add |
+| D6 | Automated off-site backups | Deferred; manual `/api/export` in M4, plus PITR if available on Free |
+| D7 | Per-note sharing or roles | Deferred; would add a `note_members` table and a per-note check |
+| D8 | Trash / restore UI | Deferred; soft-deleted rows stay in the table and appear in `/api/export` |
+| D9 | Staging environment | Deferred; a second Worker (`colo-staging`) would get its own Durable Object and data automatically |
 
 ---
 
 ## 13. Reference — verified service limits
 
-Figures confirmed against AWS documentation in September 2026.
+Figures confirmed against Cloudflare documentation in September 2026.
 
-**Lambda:** 15-minute (900 s) maximum timeout for standard invocations, 90 minutes for Managed Instances; memory 128 MB–10,240 MB with CPU scaling proportionally (≈1 vCPU at 1,769 MB); `/tmp` 512 MB–10,240 MB; deployment package 50 MB zipped / 250 MB unzipped / 10 GB as a container image; 6 MB synchronous payload; 1,000 concurrent executions per region by default. Cold starts affect well under 1% of invocations in steady traffic and typically range from under 100 ms to just over a second — largely irrelevant to this design, since AppSync resolves directly to DynamoDB without Lambda in the request path.
+**Workers.** Free: 100,000 requests/day, 10 ms CPU per invocation; exceeding a daily limit makes further operations fail with errors rather than incur charges. Paid: $5/month minimum including 10 million requests and 30 million CPU-ms per month. Static asset requests are free and unlimited on both plans. `_headers` rules do not apply to responses generated by Worker code. Preview URLs are not generated for Workers that implement a Durable Object.
 
-**AWS Free Tier structure (post-July 2025):** Accounts created on or after 15 July 2025 receive $100 in sign-up credits and can earn up to $100 more by completing activities. Credits expire 12 months after account creation. At sign-up the account chooses one of two plans. The **Free plan** covers select services only and never charges; it closes automatically after six months or when the credits are used up, whichever comes first, and resources are deleted 90 days later unless the account upgrades. The **Paid plan** covers all services and bills usage beyond the credits at standard rates. These accounts get no 12-month trial allowances; those remain only for accounts created before 15 July 2025, and every such trial had expired by July 2026. Separately, 30+ services carry always-free monthly allowances on both plans, which is the category this architecture targets for everything except S3 and AppSync.
+**Durable Objects.** Free plan supports only SQLite-backed objects: 100,000 requests/day, 13,000 GB-s duration/day, 5 million rows read/day, 100,000 rows written/day, 5 GB storage total, 1 GB per object, 100 classes per account. Limits reset at 00:00 UTC. Incoming WebSocket messages are billed at a 20:1 ratio. Objects idle and eligible for hibernation are not billed for duration; `setWebSocketAutoResponse()` replies without waking the object or incurring duration charges. Socket attachments are limited to 16 KiB; received WebSocket messages to 32 MiB; CPU per request defaults to 30 seconds. Each index row updated counts as an additional row written. SQLite point-in-time recovery covers the last 30 days (Free-plan availability not stated).
+
+**Workers Logs.** Free: 200,000 log events/day with 3-day retention. Paid: 20 million events/month included, 7-day retention.
+
+**Workers Builds.** Free: 3,000 build minutes/month, one concurrent build, 20-minute timeout.
+
+**Cloudflare Access (for ADR 0002).** Worker-level Access policies do not currently support WebSocket connections; `ctx.access` is not passed to Workers that serve Static Assets. Zero Trust's free plan covers up to 50 users.
 
 ---
 
 ## Sources
 
-- [AWS Free Tier](https://aws.amazon.com/free/)
-- [AWS Free Tier FAQs](https://aws.amazon.com/free/free-tier-faqs/)
-- [AWS Billing — Choosing a Free Tier plan](https://docs.aws.amazon.com/awsaccountbilling/latest/aboutv2/free-tier-plans.html)
-- [AWS Billing — Legacy Free Tier (before July 15, 2025)](https://docs.aws.amazon.com/awsaccountbilling/latest/aboutv2/billing-free-tier.html)
-- [Amazon S3 Pricing](https://aws.amazon.com/s3/pricing/)
-- [AWS Free Tier — Networking (CloudFront)](https://aws.amazon.com/free/networking/)
-- [AWS Free Tier — Databases (DynamoDB)](https://aws.amazon.com/free/database/)
-- [Amazon Cognito Pricing](https://aws.amazon.com/cognito/pricing/)
-- [AWS AppSync Pricing](https://aws.amazon.com/appsync/pricing/)
-- [Amazon API Gateway Pricing](https://aws.amazon.com/api-gateway/pricing/)
-- [AWS Lambda Pricing](https://aws.amazon.com/lambda/pricing/)
-- [AWS Lambda quotas](https://docs.aws.amazon.com/lambda/latest/dg/gettingstarted-limits.html)
-- [Lambda execution environment lifecycle](https://docs.aws.amazon.com/lambda/latest/dg/lambda-runtime-environment.html)
+- [Cloudflare Workers pricing](https://developers.cloudflare.com/workers/platform/pricing/)
+- [Durable Objects pricing](https://developers.cloudflare.com/durable-objects/platform/pricing/)
+- [Durable Objects limits](https://developers.cloudflare.com/durable-objects/platform/limits/)
+- [Durable Objects SQLite storage API](https://developers.cloudflare.com/durable-objects/api/sqlite-storage-api/)
+- [Durable Objects state API (WebSockets, auto-response)](https://developers.cloudflare.com/durable-objects/api/state/)
+- [Durable Objects WebSocket best practices](https://developers.cloudflare.com/durable-objects/best-practices/websockets/)
+- [Durable Objects migrations and exports](https://developers.cloudflare.com/durable-objects/reference/durable-objects-migrations/)
+- [Workers Static Assets headers](https://developers.cloudflare.com/workers/static-assets/headers/)
+- [Workers preview URLs](https://developers.cloudflare.com/workers/configuration/previews/)
+- [Workers Logs](https://developers.cloudflare.com/workers/observability/logs/workers-logs/)
+- [Workers Builds limits and pricing](https://developers.cloudflare.com/workers/ci-cd/builds/limits-and-pricing/)
+- [Cloudflare Access for Workers](https://developers.cloudflare.com/workers/configuration/cloudflare-access/)
+- [Cloudflare Registrar](https://www.cloudflare.com/products/registrar/)
+- [SimpleWebAuthn server](https://simplewebauthn.dev/docs/packages/server)
