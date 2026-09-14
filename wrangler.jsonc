@@ -1,0 +1,25 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "colo",
+  "main": "src/worker/index.ts",
+  "compatibility_date": "2026-09-01",
+  "workers_dev": true,
+  "preview_urls": false,
+  "assets": {
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "WORKSPACE", "class_name": "Workspace" }]
+  },
+  // Declarative Durable Object lifecycle; replaces the older "migrations" array.
+  // The Free plan only supports SQLite-backed objects.
+  "exports": {
+    "Workspace": { "type": "durable-object", "storage": "sqlite" }
+  },
+  "vars": {
+    "RP_ID": "colo.manan-vala.workers.dev",
+    "ORIGIN": "https://colo.manan-vala.workers.dev"
+  },
+  "observability": { "enabled": true, "head_sampling_rate": 1 }
+}
