@@ -5,9 +5,11 @@ export { Document } from "./document";
 export { Workspace } from "./workspace";
 
 // Mirrors public/_headers, which Cloudflare does not apply to Worker responses (§6.3).
+// style-src allows inline styles: rich-text marks (colour, font, size), table column widths and
+// Radix menus render them. script-src stays 'self', which also blocks inline event handlers.
 const SECURITY_HEADERS: Record<string, string> = {
   "Content-Security-Policy":
-    "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
   "X-Content-Type-Options": "nosniff",
   "Referrer-Policy": "same-origin",
   "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
