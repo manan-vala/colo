@@ -1,6 +1,6 @@
 # Colo — Build & Deployment Plan
 
-**Status:** Draft v4.2
+**Status:** Draft v4.3
 **Date:** 15 September 2026
 **Owner:** SWC
 **Platform:** Cloudflare Workers (Free plan)
@@ -20,6 +20,7 @@
 | v4 | 15 Sep 2026 | **From shared notes to a collaborative document editor in the style of Google Docs.** Tiptap 3 + Yjs; one Document Durable Object per document on `y-partyserver`; real pages, comments, images, restore points, DOCX import/export; new cost model and milestones. Rationale and research: [ADR 0003](decisions/0003-collaborative-document-engine.md) |
 | v4.1 | 15 Sep 2026 | **M1 and M2 built** (commits `02fccee`, `a38b90f`). Corrections: message rate cap is a token bucket of 30/s with bursts of 600 (60 per 10 s cut off fast typists); `doc_meta` deferred — save metadata stays in memory; title changes reach the document list immediately while other edits stay throttled; M2 keeps the strict CSP because nothing in it injects styles (relaxation moves to M3); measured 2 WebSocket messages per keystroke (edit + cursor), as §9.2 assumed |
 | v4.2 | 15 Sep 2026 | **M1 and M2 deployed; M2 gate passed** on a temporary `colo-staging` Worker (deleted afterwards): co-editing on Cloudflare; Document objects were evicted and reloaded from SQLite while both sockets stayed open, running no code in between; 238 tokens typed through a redeploy all arrived. The gate found a client bug — the editor unmounted while reconnecting and dropped keystrokes — fixed in `38ae967` |
+| v4.3 | 15 Sep 2026 | **M3 built** (commits `1f5618a`…`bea380f`): Docs-style shell and full F5 formatting set; CSP `style-src` relaxed as planned. Deviations: the outline reads headings from editor state instead of Tiptap's TableOfContents extension, so it never writes heading IDs into the shared document; paragraph styles are Normal text and Headings 1–4 (no Title/Subtitle); drag handles and UniqueID are deferred until a milestone needs them; the page canvas is Letter-sized without pagination until M4 |
 
 Earlier designs remain readable in git history.
 
@@ -294,13 +295,13 @@ Added in v4: document socket authorisation through Workspace, the `document_sess
 | Framework | React 19 + TypeScript | Matches Tiptap's React bindings |
 | Build tool | Vite 8 + `@cloudflare/vite-plugin` | Runs the Worker and both Durable Object classes in workerd during `npm run dev` |
 | UI components | Tailwind CSS v4 + shadcn/ui (Radix, Nova preset) | Menus, dropdowns, popovers, dialogs, sheets and tooltips for a Docs-style shell |
-| Editor | Tiptap 3 (MIT): StarterKit (with Tiptap's own undo/redo disabled), Collaboration, CollaborationCaret, TextStyle (font family, size, colour), Highlight, TextAlign, TaskList, Image, TableOfContents, UniqueID, DragHandle, Placeholder, Subscript/Superscript | Headless, so the UI is ours; most widely used Yjs binding; all listed extensions are MIT |
+| Editor | Tiptap 3 (MIT): StarterKit (links limited to http/https/mailto/tel; Tiptap's own undo/redo disabled), Collaboration, CollaborationCaret, TextStyleKit (font family, size, colour), Highlight (multicolour), TextAlign, TaskList/TaskItem, TableKit (resizable), Subscript/Superscript, Placeholder, plus Colo's Indent and DocsFormatting extensions. Image arrives in M6 | Headless, so the UI is ours; most widely used Yjs binding; all listed extensions are MIT |
 | Real pages | `tiptap-pagination-plus` + `tiptap-table-plus` (MIT) | Decoration-only pagination that is safe with Yjs; tables split across pages (spike, ADR 0003). Fork or vendor if they stall |
 | Collaboration client | `yjs` + `y-partyserver/provider` | Reconnect, resync and awareness handled by the library |
 | Comments | Our code: `comment` mark + `Y.Map` threads + margin cards | Tiptap Comments is paid |
 | DOCX | `mammoth` (import), `docx` (export), JSZip (page settings) | Open source, browser-side |
 | Auth | `@simplewebauthn/browser` | Passkey prompts |
-| Fonts | Self-hosted, metric-compatible open fonts via `@fontsource` (e.g. Arimo, Tinos, Carlito, Caladea) plus Geist for the UI | No font CDN (CSP, privacy); closer DOCX layout; availability confirmed in M3 |
+| Fonts | Self-hosted via `@fontsource` (OFL): Arimo (shown as Arial), Carlito (Calibri), Caladea (Cambria), Cousine (Courier New), Tinos (Times New Roman); Geist for the UI | No font CDN (CSP, privacy); metric-compatible, so DOCX layout stays close |
 | Tests | Vitest 4.1 + `@cloudflare/vitest-plugin`; puppeteer-core with the local Chrome for editor smoke tests | Real Durable Objects and SQLite in tests; headless checks of pagination and sync |
 
 ### 6.2 Layout (Google Docs–style, Colo branding)
@@ -330,7 +331,7 @@ Added in v4: document socket authorisation through Workspace, the `document_sess
   Cache-Control: public, max-age=31536000, immutable
 ```
 
-- **`style-src 'unsafe-inline'` is required** because `tiptap-pagination-plus` and Radix insert `<style>` elements (verified in the spike). `script-src` stays `'self'`, which also blocks inline event handlers. Tiptap's own injected CSS is disabled (`injectCSS: false`) and shipped as a stylesheet. The change lands in M3, when Radix menus and pagination arrive; M2's editor works under the strict policy (verified under `vite preview`).
+- **`style-src 'unsafe-inline'` is required** because rich-text marks (colour, font, size) and table column widths render inline styles, and `tiptap-pagination-plus` and Radix insert `<style>` elements (verified in the spike). Applied in M3 (`7347c63`). `script-src` stays `'self'`, which also blocks inline event handlers. Tiptap's own injected CSS is disabled (`injectCSS: false`) and shipped as a stylesheet. M2 ran under the strict policy; M3 relaxed `style-src` when formatting arrived.
 - **Header/footer text is plain text**, escaped before it reaches pagination-plus (which renders HTML), so a document cannot inject markup through page settings.
 - `_headers` does not apply to Worker responses, so the Worker adds the same headers to `/api` responses (except `101` upgrades), plus `Cache-Control: no-store` unless the object sets one.
 
@@ -375,8 +376,8 @@ colo/
       doc-schema.ts         # Yjs document structure and settings types
   scripts/
     invite.ts
-  e2e/                      # browser smoke tests (puppeteer-core + Chrome virtual passkeys)
-    auth.ts, collab.ts, gate.ts
+  e2e/                      # browser tests (puppeteer-core + Chrome virtual passkeys)
+    auth.ts, collab.ts, formatting.ts, gate.ts
   test/
   docs/
     colo-plan.md
@@ -527,7 +528,7 @@ Assumptions: both people actively type for 3 hours each (about 3 edits per secon
 | **M0 — Skeleton** ✅ | Vite + React + shadcn; Worker router; Workspace object answering `/api/health`; deployed | Done 15 Sep 2026 (commit `48cb332`) | — |
 | **M1 — Passkey auth** ✅ built | SimpleWebAuthn-in-workerd spike (runs without `nodejs_compat`); auth tables; invite, register, login, logout; `scripts/invite.ts`; sign-in and invite screens | Tests with a software authenticator ✅; browser test with Chrome virtual passkeys ✅; deployed ✅; **both users enrolled — pending** | Commit `02fccee` |
 | **M2 — Collaboration core** ✅ built | `documents` table and list API; Document object on `y-partyserver` with hibernation, chunked saves, caps; Worker auth handoff and revocation; minimal Tiptap editor with collaboration and cursors; document list, create, rename, delete; hidden-tab disconnect | Local: 44 workerd tests ✅, two-browser co-editing test on the production build under the strict CSP ✅. **Deployed gate ✅ passed 15 Sep 2026 on `colo-staging`** (`npm run e2e:gate`): co-editing; eviction and reload while sockets stay open (`document-load` logs, no events while idle); 238 tokens typed through a redeploy all arrived and persisted. Still to watch: Durable Objects duration in the dashboard during real use | Commits `a38b90f`, `38ae967` |
-| **M3 — Document UI** | Docs-style shell (top bar, menus, toolbar), formatting set (F5), outline, fonts, save status, mobile layout, CSP change | Every toolbar action works in two collaborating browsers; no CSP violations; usable on a phone | 3–4 days |
+| **M3 — Document UI** ✅ built | Docs-style shell (title bar, File/Edit/View/Insert/Format menus, toolbar), formatting set (F5), outline, zoom, fonts, save status, mobile layout, CSP change | `npm run e2e:formatting` ✅: every toolbar and menu action reaches the second browser, identical content, no CSP violations, 390px layout without horizontal scroll. **Pending:** production deploy and a check on a real phone | Commits `1f5618a`…`bea380f` |
 | **M4 — Real pages** | Pagination with A4/Letter, margins, headers/footers, page numbers including "Page X of Y", table splitting, page breaks, page setup dialog, print stylesheet | 50-page document with tables stays responsive (< 16 ms layout per keystroke on a laptop); printed PDF matches on-screen pages; remote edits reflow correctly | 2–3 days |
 | **M5 — Comments** | Comment mark, thread storage, margin cards, replies, resolve/reopen, detached threads | Comments sync live, survive edits to anchored text, restore with restore points | 2–3 days |
 | **M6 — Images and restore points** | Upload, paste, resize and alignment of images; automatic and named restore points; restore with `pre-restore` copy | Image-heavy document stays under limits; restoring a point updates both browsers | 2 days |

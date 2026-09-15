@@ -37,6 +37,7 @@ Browser smoke tests drive the local Chrome with virtual passkeys (start `npm run
 ```bash
 npm run e2e:auth     # invite → passkey → sign out → sign in
 npm run e2e:collab   # two people co-edit a document
+npm run e2e:formatting   # every toolbar and menu action reaches the other browser (M3)
 COLO_URL=https://… npm run e2e:gate   # M2 gate on a deployed Worker (hibernation, deploy mid-typing)
 ```
 
@@ -70,4 +71,4 @@ colo/
 
 M0 (skeleton) is deployed at <https://colo.manan-vala.workers.dev>: the SPA, the Worker router and an empty SQLite-backed Workspace Durable Object (running in SIN) answering `GET /api/health`.
 
-Plan v4 turns Colo into a collaborative document editor (§11 of the plan). **M1 (passkey sign-in) and M2 (collaborative documents) are deployed**, and M2 passed its go/no-go gate on Cloudflare (hibernation, reconnect through a redeploy). Next: enrol both users, then M3, the Docs-style UI.
+Plan v4 turns Colo into a collaborative document editor (§11 of the plan). **M1 (passkey sign-in) and M2 (collaborative documents) are deployed**, and M2 passed its go/no-go gate on Cloudflare (hibernation, reconnect through a redeploy). **M3 (Google Docs-style editor UI) is built** — menus, toolbar, fonts, colours, links, lists, tables, outline and zoom — and awaits deployment. Next: M4, real pages.
