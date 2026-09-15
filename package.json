@@ -16,7 +16,8 @@
     "invite": "node scripts/invite.ts",
     "e2e:auth": "node e2e/auth.ts",
     "e2e:collab": "node e2e/collab.ts",
-    "e2e:gate": "node e2e/gate.ts"
+    "e2e:gate": "node e2e/gate.ts",
+    "e2e:formatting": "node e2e/formatting.ts"
   },
   "dependencies": {
     "@floating-ui/dom": "^1.8.0",
