@@ -1,90 +1,44 @@
-import { CircleCheck, CircleX, LoaderCircle, RefreshCw } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
-import type { HealthResponse } from "../shared/protocol";
-import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardAction,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { LoaderCircle } from "lucide-react";
+import { useEffect, useState } from "react";
+import type { Member } from "../shared/protocol";
+import { InviteScreen, SignInScreen } from "./auth/AuthScreens";
+import { fetchMe, signOut } from "./auth";
+import { Home } from "./home/Home";
+import { navigate, usePathname } from "./router";
 
-type HealthState =
-  | { status: "loading" }
-  | { status: "ok"; health: HealthResponse }
-  | { status: "error"; message: string };
+type AuthState = { status: "loading" } | { status: "signed-out" } | { status: "signed-in"; member: Member };
 
 export default function App() {
-  const [state, setState] = useState<HealthState>({ status: "loading" });
-
-  const check = useCallback(async () => {
-    setState({ status: "loading" });
-    try {
-      const response = await fetch("/api/health");
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      setState({ status: "ok", health: (await response.json()) as HealthResponse });
-    } catch (error) {
-      setState({ status: "error", message: error instanceof Error ? error.message : String(error) });
-    }
-  }, []);
+  const pathname = usePathname();
+  const [auth, setAuth] = useState<AuthState>({ status: "loading" });
 
   useEffect(() => {
-    void check();
-  }, [check]);
+    fetchMe()
+      .then((member) => setAuth(member ? { status: "signed-in", member } : { status: "signed-out" }))
+      .catch(() => setAuth({ status: "signed-out" }));
+  }, []);
 
-  return (
-    <main className="mx-auto flex min-h-svh max-w-md flex-col justify-center gap-6 px-4 py-10">
-      <div>
-        <h1 className="text-3xl font-semibold tracking-tight">Colo</h1>
-        <p className="text-muted-foreground">Shared notes for two. Skeleton build (M0).</p>
-      </div>
+  const onSignedIn = (member: Member) => {
+    setAuth({ status: "signed-in", member });
+    navigate("/", { replace: true });
+  };
 
-      <Card>
-        <CardHeader>
-          <CardTitle>API health</CardTitle>
-          <CardDescription>Worker → Workspace Durable Object</CardDescription>
-          <CardAction>
-            <Button variant="outline" size="sm" onClick={check} disabled={state.status === "loading"}>
-              <RefreshCw data-icon="inline-start" />
-              Check
-            </Button>
-          </CardAction>
-        </CardHeader>
-        <CardContent>
-          <HealthDetails state={state} />
-        </CardContent>
-      </Card>
-    </main>
-  );
-}
+  const onSignOut = async () => {
+    await signOut().catch(() => undefined);
+    setAuth({ status: "signed-out" });
+    navigate("/", { replace: true });
+  };
 
-function HealthDetails({ state }: { state: HealthState }) {
-  if (state.status === "loading") {
+  if (pathname === "/invite") return <InviteScreen onSignedIn={onSignedIn} />;
+
+  if (auth.status === "loading") {
     return (
-      <p className="flex items-center gap-2 text-muted-foreground">
-        <LoaderCircle className="size-4 animate-spin" /> Checking…
-      </p>
+      <main className="flex min-h-svh items-center justify-center text-muted-foreground">
+        <LoaderCircle className="size-5 animate-spin" aria-label="Loading" />
+      </main>
     );
   }
-  if (state.status === "error") {
-    return (
-      <p className="flex items-center gap-2 text-destructive">
-        <CircleX className="size-4" /> Unreachable: {state.message}
-      </p>
-    );
-  }
-  return (
-    <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1">
-      <dt className="text-muted-foreground">Status</dt>
-      <dd className="flex items-center gap-1.5">
-        <CircleCheck className="size-4 text-emerald-600" /> OK
-      </dd>
-      <dt className="text-muted-foreground">Schema version</dt>
-      <dd>{state.health.schemaVersion}</dd>
-      <dt className="text-muted-foreground">Object location</dt>
-      <dd>{state.health.colo ?? "unknown"}</dd>
-    </dl>
-  );
+  if (auth.status === "signed-out") return <SignInScreen onSignedIn={onSignedIn} />;
+
+  return <Home member={auth.member} onSignOut={onSignOut} />;
 }

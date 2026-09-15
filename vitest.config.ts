@@ -5,6 +5,9 @@ export default defineConfig({
   plugins: [
     cloudflareTest({
       wrangler: { configPath: "./wrangler.jsonc" },
+      miniflare: {
+        bindings: { RP_ID: "colo.example", ORIGIN: "https://colo.example", ADMIN_TOKEN: "test-admin-token" },
+      },
     }),
   ],
   test: {

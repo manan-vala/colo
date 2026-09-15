@@ -2,7 +2,7 @@ import { env, runInDurableObject } from "cloudflare:test";
 import { exports } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 import type { HealthResponse } from "../src/shared/protocol";
-import { readSchemaVersion } from "../src/worker/db";
+import { WORKSPACE_MIGRATIONS, readSchemaVersion } from "../src/worker/db";
 
 const BASE = "https://colo.example";
 
@@ -13,7 +13,7 @@ describe("GET /api/health", () => {
     expect(response.status).toBe(200);
     const body = await response.json<HealthResponse>();
     expect(body.ok).toBe(true);
-    expect(body.schemaVersion).toBe(0);
+    expect(body.schemaVersion).toBe(WORKSPACE_MIGRATIONS.length);
     expect(body.colo === null || typeof body.colo === "string").toBe(true);
   });
 
@@ -26,7 +26,7 @@ describe("GET /api/health", () => {
   });
 
   it("rejects other methods", async () => {
-    const response = await exports.default.fetch(`${BASE}/api/health`, { method: "POST" });
+    const response = await exports.default.fetch(`${BASE}/api/health`, { method: "POST", headers: { Origin: BASE } });
     expect(response.status).toBe(405);
   });
 });
@@ -42,7 +42,7 @@ describe("Workspace Durable Object", () => {
   it("is SQLite-backed", async () => {
     const stub = env.WORKSPACE.getByName("default");
     await runInDurableObject(stub, (_instance, state) => {
-      expect(readSchemaVersion(state.storage.sql)).toBe(0);
+      expect(readSchemaVersion(state.storage.sql)).toBe(WORKSPACE_MIGRATIONS.length);
     });
   });
 });

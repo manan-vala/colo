@@ -1,7 +1,7 @@
 /**
- * Schema migrations for the Workspace Durable Object (§3.3).
+ * Schema migrations for the Durable Objects (plan §3.4).
  *
- * MIGRATIONS[i] upgrades the database from version i to i + 1. Migrations are
+ * migrations[i] upgrades a database from version i to i + 1. Migrations are
  * forward-only and additive (new tables, new nullable columns) so that
  * `wrangler rollback` keeps working against a newer schema.
  *
@@ -10,7 +10,51 @@
  */
 export type Migration = (sql: SqlStorage) => void;
 
-const MIGRATIONS: Migration[] = [];
+export const WORKSPACE_MIGRATIONS: Migration[] = [
+  // 1: members, passkeys, invites, sessions, auth challenges (M1)
+  (sql) => {
+    sql.exec(`
+      CREATE TABLE members (
+        id            TEXT PRIMARY KEY,
+        email         TEXT NOT NULL UNIQUE COLLATE NOCASE,
+        display_name  TEXT NOT NULL,
+        created_at    TEXT NOT NULL,
+        disabled_at   TEXT
+      );
+      CREATE TABLE passkeys (
+        credential_id TEXT PRIMARY KEY,
+        member_id     TEXT NOT NULL REFERENCES members(id),
+        public_key    BLOB NOT NULL,
+        counter       INTEGER NOT NULL DEFAULT 0,
+        transports    TEXT,
+        created_at    TEXT NOT NULL,
+        last_used_at  TEXT
+      );
+      CREATE INDEX passkeys_by_member ON passkeys(member_id);
+      CREATE TABLE invites (
+        token_hash    TEXT PRIMARY KEY,
+        member_id     TEXT NOT NULL REFERENCES members(id),
+        expires_at    TEXT NOT NULL,
+        used_at       TEXT
+      );
+      CREATE TABLE sessions (
+        id_hash       TEXT PRIMARY KEY,
+        member_id     TEXT NOT NULL REFERENCES members(id),
+        created_at    TEXT NOT NULL,
+        expires_at    TEXT NOT NULL,
+        last_seen_at  TEXT NOT NULL
+      );
+      CREATE INDEX sessions_by_member ON sessions(member_id);
+      CREATE TABLE auth_challenges (
+        id            TEXT PRIMARY KEY,
+        challenge     TEXT NOT NULL,
+        purpose       TEXT NOT NULL CHECK (purpose IN ('register', 'login')),
+        member_id     TEXT,
+        expires_at    TEXT NOT NULL
+      );
+    `);
+  },
+];
 
 export function readSchemaVersion(sql: SqlStorage): number {
   const row = sql.exec<{ version: number }>("SELECT version FROM schema_version WHERE id = 1").toArray()[0];
@@ -18,7 +62,7 @@ export function readSchemaVersion(sql: SqlStorage): number {
 }
 
 /** Applies pending migrations, each in its own transaction, and returns the resulting version. */
-export function migrate(storage: DurableObjectStorage, migrations: Migration[] = MIGRATIONS): number {
+export function migrate(storage: DurableObjectStorage, migrations: Migration[]): number {
   const { sql } = storage;
   sql.exec(
     "CREATE TABLE IF NOT EXISTS schema_version (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL)",
