@@ -12,5 +12,7 @@ export default defineConfig({
   ],
   test: {
     include: ["test/**/*.test.ts"],
+    // The first requests in a fresh workerd runtime load the whole Worker bundle.
+    testTimeout: 30_000,
   },
 });

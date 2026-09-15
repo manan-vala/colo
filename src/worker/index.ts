@@ -1,3 +1,7 @@
+import { isDocumentId } from "../shared/protocol";
+import { IDENTITY_HEADER, encodeIdentity } from "./documents";
+
+export { Document } from "./document";
 export { Workspace } from "./workspace";
 
 // Mirrors public/_headers, which Cloudflare does not apply to Worker responses (§6.3).
@@ -45,8 +49,21 @@ export default {
     if (!url.pathname.startsWith("/api/")) return jsonError(404, "NOT_FOUND");
     if (!hasTrustedOrigin(request, url, env)) return jsonError(403, "BAD_ORIGIN");
 
-    const stub = env.WORKSPACE.getByName("default", { locationHint: "apac" });
-    const response = await stub.fetch(request);
+    const workspace = env.WORKSPACE.getByName("default", { locationHint: "apac" });
+
+    const socket = /^\/api\/docs\/([^/]+)\/ws$/.exec(url.pathname);
+    if (socket) {
+      if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") return jsonError(426, "UPGRADE_REQUIRED");
+      if (!isDocumentId(socket[1])) return jsonError(404, "NOT_FOUND");
+      const auth = await workspace.authorizeDocument(request.headers.get("Cookie"), socket[1]);
+      if (!auth.ok) return jsonError(auth.status, auth.error);
+      // Only the Worker sets the identity header; anything a client sent is replaced.
+      const headers = new Headers(request.headers);
+      headers.set(IDENTITY_HEADER, encodeIdentity(auth.identity));
+      return env.DOCUMENT.getByName(socket[1], { locationHint: "apac" }).fetch(new Request(request, { headers }));
+    }
+
+    const response = await workspace.fetch(request);
     return response.webSocket ? response : withSecurityHeaders(response);
   },
 } satisfies ExportedHandler<Env>;

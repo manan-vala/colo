@@ -128,3 +128,126 @@
     @apply font-sans;
     }
 }
+/* Tiptap's default editor CSS, copied from @tiptap/core because injectCSS is disabled (CSP). */
+.ProseMirror {
+  position: relative;
+}
+
+.ProseMirror {
+  word-wrap: break-word;
+  white-space: pre-wrap;
+  white-space: break-spaces;
+  -webkit-font-variant-ligatures: none;
+  font-variant-ligatures: none;
+  font-feature-settings: "liga" 0; /* the above doesn't seem to work in Edge */
+}
+
+.ProseMirror [contenteditable="false"] {
+  white-space: normal;
+}
+
+.ProseMirror [contenteditable="false"] [contenteditable="true"] {
+  white-space: pre-wrap;
+}
+
+.ProseMirror pre {
+  white-space: pre-wrap;
+}
+
+img.ProseMirror-separator {
+  display: inline !important;
+  border: none !important;
+  margin: 0 !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
+.ProseMirror-gapcursor {
+  display: none;
+  pointer-events: none;
+  position: absolute;
+  margin: 0;
+}
+
+.ProseMirror-gapcursor:after {
+  content: "";
+  display: block;
+  position: absolute;
+  top: -2px;
+  width: 20px;
+  border-top: 1px solid black;
+  animation: ProseMirror-cursor-blink 1.1s steps(2, start) infinite;
+}
+
+@keyframes ProseMirror-cursor-blink {
+  to {
+    visibility: hidden;
+  }
+}
+
+.ProseMirror-hideselection *::selection {
+  background: transparent;
+}
+
+.ProseMirror-hideselection *::-moz-selection {
+  background: transparent;
+}
+
+.ProseMirror-hideselection * {
+  caret-color: transparent;
+}
+
+.ProseMirror-focused .ProseMirror-gapcursor {
+  display: block;
+}
+
+/* Document content inside the editor (Tailwind's preflight resets these). */
+.colo-editor {
+  outline: none;
+  min-height: 60vh;
+  font-size: 11pt;
+  line-height: 1.5;
+}
+.colo-editor > * + * { margin-top: 0.6em; }
+.colo-editor h1 { font-size: 2em; font-weight: 600; line-height: 1.2; margin-top: 0.8em; }
+.colo-editor h2 { font-size: 1.5em; font-weight: 600; line-height: 1.25; margin-top: 0.8em; }
+.colo-editor h3 { font-size: 1.25em; font-weight: 600; margin-top: 0.8em; }
+.colo-editor ul { list-style: disc; padding-left: 1.5em; }
+.colo-editor ol { list-style: decimal; padding-left: 1.5em; }
+.colo-editor li > p { margin: 0; }
+.colo-editor blockquote { border-left: 3px solid var(--border); padding-left: 1em; color: var(--muted-foreground); }
+.colo-editor code { background: var(--muted); border-radius: 4px; padding: 0.1em 0.3em; font-size: 0.9em; }
+.colo-editor pre { background: var(--muted); border-radius: 6px; padding: 0.75em 1em; font-family: ui-monospace, monospace; }
+.colo-editor hr { border: none; border-top: 1px solid var(--border); margin: 1.5em 0; }
+.colo-editor a { color: #1a73e8; text-decoration: underline; }
+.colo-editor p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  pointer-events: none;
+  color: var(--muted-foreground);
+}
+
+/* Remote cursors from @tiptap/extension-collaboration-caret (colours are set via element.style). */
+.collaboration-carets__caret {
+  border-left: 2px solid;
+  border-right: none;
+  margin-left: -1px;
+  margin-right: -1px;
+  position: relative;
+  word-break: normal;
+  pointer-events: none;
+}
+.collaboration-carets__label {
+  position: absolute;
+  top: -1.4em;
+  left: -2px;
+  padding: 0.05rem 0.35rem;
+  border-radius: 4px 4px 4px 0;
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: normal;
+  white-space: nowrap;
+  user-select: none;
+}

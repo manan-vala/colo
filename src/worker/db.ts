@@ -54,6 +54,39 @@ export const WORKSPACE_MIGRATIONS: Migration[] = [
       );
     `);
   },
+  // 2: document index and which sessions opened which documents (M2)
+  (sql) => {
+    sql.exec(`
+      CREATE TABLE documents (
+        id            TEXT PRIMARY KEY,
+        title         TEXT NOT NULL,
+        created_at    TEXT NOT NULL,
+        created_by    TEXT NOT NULL REFERENCES members(id),
+        updated_at    TEXT NOT NULL,
+        updated_by    TEXT NOT NULL REFERENCES members(id),
+        deleted_at    TEXT
+      );
+      CREATE INDEX documents_live_by_updated ON documents(deleted_at, updated_at);
+      CREATE TABLE document_sessions (
+        doc_id        TEXT NOT NULL,
+        session_hash  TEXT NOT NULL,
+        connected_at  TEXT NOT NULL,
+        PRIMARY KEY (session_hash, doc_id)
+      ) WITHOUT ROWID;
+    `);
+  },
+];
+
+export const DOCUMENT_MIGRATIONS: Migration[] = [
+  // 1: chunked Yjs state (M2)
+  (sql) => {
+    sql.exec(`
+      CREATE TABLE doc_state (
+        seq           INTEGER PRIMARY KEY,
+        data          BLOB NOT NULL
+      );
+    `);
+  },
 ];
 
 export function readSchemaVersion(sql: SqlStorage): number {

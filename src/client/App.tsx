@@ -1,8 +1,9 @@
 import { LoaderCircle } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { Member } from "../shared/protocol";
 import { InviteScreen, SignInScreen } from "./auth/AuthScreens";
 import { fetchMe, signOut } from "./auth";
+import { DocumentPage } from "./doc/DocumentPage";
 import { Home } from "./home/Home";
 import { navigate, usePathname } from "./router";
 
@@ -20,8 +21,11 @@ export default function App() {
 
   const onSignedIn = (member: Member) => {
     setAuth({ status: "signed-in", member });
-    navigate("/", { replace: true });
+    if (pathname === "/invite") navigate("/", { replace: true });
   };
+
+  // Keeps the current path so signing back in returns to the same document.
+  const onSessionEnded = useCallback(() => setAuth({ status: "signed-out" }), []);
 
   const onSignOut = async () => {
     await signOut().catch(() => undefined);
@@ -40,5 +44,9 @@ export default function App() {
   }
   if (auth.status === "signed-out") return <SignInScreen onSignedIn={onSignedIn} />;
 
-  return <Home member={auth.member} onSignOut={onSignOut} />;
+  const docMatch = /^\/d\/([0-9A-HJKMNP-TV-Z]{26})$/.exec(pathname);
+  if (docMatch) {
+    return <DocumentPage docId={docMatch[1]} member={auth.member} onSessionEnded={onSessionEnded} />;
+  }
+  return <Home member={auth.member} onSignOut={onSignOut} onSessionEnded={onSessionEnded} />;
 }

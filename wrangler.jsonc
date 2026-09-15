@@ -10,12 +10,16 @@
     "run_worker_first": ["/api/*"]
   },
   "durable_objects": {
-    "bindings": [{ "name": "WORKSPACE", "class_name": "Workspace" }]
+    "bindings": [
+      { "name": "WORKSPACE", "class_name": "Workspace" },
+      { "name": "DOCUMENT", "class_name": "Document" }
+    ]
   },
   // Declarative Durable Object lifecycle; replaces the older "migrations" array.
   // The Free plan only supports SQLite-backed objects.
   "exports": {
-    "Workspace": { "type": "durable-object", "storage": "sqlite" }
+    "Workspace": { "type": "durable-object", "storage": "sqlite" },
+    "Document": { "type": "durable-object", "storage": "sqlite" }
   },
   "vars": {
     "RP_ID": "colo.manan-vala.workers.dev",
