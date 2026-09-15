@@ -25,6 +25,8 @@ export interface Collaboration {
   save: SaveStatus;
   savedAt: Date | null;
   synced: boolean;
+  /** True once the first sync completed; stays true through reconnects so the editor stays mounted. */
+  everSynced: boolean;
   presence: Presence[];
   ended: EndReason;
   notice: string | null;
@@ -37,6 +39,7 @@ const INITIAL_STATUS: Status = {
   save: "idle",
   savedAt: null,
   synced: false,
+  everSynced: false,
   presence: [],
   ended: null,
   notice: null,
@@ -73,7 +76,7 @@ export function useCollaboration(docId: string, member: Member): Collaboration |
       if (paused) return;
       update({ connection: status === "connected" ? "connected" : status === "connecting" ? "connecting" : "offline" });
     };
-    const onSync = (synced: boolean) => update({ synced });
+    const onSync = (synced: boolean) => update(synced ? { synced, everSynced: true } : { synced });
     const onUpdate = (_update: Uint8Array, origin: unknown) => {
       if (origin === provider) return;
       lastLocalEdit = Date.now();

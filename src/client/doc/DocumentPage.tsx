@@ -58,7 +58,9 @@ function OpenDocument(props: { docId: string; member: Member; initialTitle: stri
           {collab.notice}
         </p>
       )}
-      {collab.synced || collab.connection === "offline" ? (
+      {/* Keep the editor mounted through reconnects: Yjs keeps local edits and sends them when the
+          socket is back. Unmounting would drop keystrokes and focus. */}
+      {collab.everSynced || collab.connection === "offline" ? (
         <Editor collab={collab} readOnly={false} />
       ) : (
         <Loading />

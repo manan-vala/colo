@@ -76,7 +76,15 @@ try {
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   const finalText = await waitForEqualText(alex.page, sam.page, 90_000);
-  check(finalText.includes(`${typed - 1} `), `all ${typed} tokens typed through the deploy reached both browsers`);
+  // Every token 0…typed-1 must be present, in order (the text is trimmed, so no trailing space on the last one).
+  const expected = Array.from({ length: typed }, (_, i) => String(i)).join(" ");
+  if (!finalText.includes(expected)) {
+    const present = new Set(finalText.split(/s+/));
+    const missing = Array.from({ length: typed }, (_, i) => String(i)).filter((token) => !present.has(token));
+    console.log(`    missing tokens (${missing.length}): ${missing.slice(0, 40).join(" ")}`);
+    console.log(`    tail of text: …${finalText.slice(-200)}`);
+  }
+  check(finalText.includes(expected), `all ${typed} tokens typed through the deploy reached both browsers, in order`);
 
   await alex.page.waitForFunction(() => document.querySelector('[data-testid="save-status"]')?.textContent?.startsWith("All changes saved"), { timeout: 30_000 });
   await sam.page.reload();
