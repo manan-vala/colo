@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { LIMITS, type DocumentSummary, type ListDocumentsResponse, type Member } from "../../shared/protocol";
 import { Button } from "@/components/ui/button";
 import logo from "../assets/logo.svg";
-import documentsBanner from "../assets/documents-banner.png";
+import documentsBanner from "../assets/documents-banner.webp";
 import { ApiRequestError, api } from "../api";
 import { timeAgo } from "../lib/time";
 import { navigate } from "../router";
