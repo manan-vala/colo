@@ -5,7 +5,8 @@ import { LIMITS, type DocumentSummary, type Member } from "../../shared/protocol
 import { Button } from "@/components/ui/button";
 import { ApiRequestError, api } from "../api";
 import { useCollaboration, type Collaboration, type Presence } from "../collab/useCollaboration";
-import { Editor } from "../editor/Editor";
+import { DocumentEditor } from "./DocumentEditor";
+import { TITLE_INPUT_ID } from "./MenuBar";
 import { timeAgo } from "../lib/time";
 import { navigate } from "../router";
 
@@ -29,6 +30,7 @@ export function DocumentPage({ docId, member, onSessionEnded }: { docId: string;
 
 function OpenDocument(props: { docId: string; member: Member; initialTitle: string; onSessionEnded: () => void }) {
   const collab = useCollaboration(props.docId, props.member);
+  const [notice, setNotice] = useState<string | null>(null);
   const { onSessionEnded } = props;
   const ended = collab?.ended;
 
@@ -41,32 +43,33 @@ function OpenDocument(props: { docId: string; member: Member; initialTitle: stri
     return <Gone title="This document was deleted" message="Someone deleted it while it was open." />;
   }
 
-  return (
-    <div className="min-h-svh bg-muted/40">
-      <header className="flex flex-wrap items-center gap-2 border-b bg-background px-3 py-2">
+  // Keep the editor mounted through reconnects: Yjs keeps local edits and sends them when the
+  // socket is back. Unmounting would drop keystrokes and focus.
+  if (!collab.everSynced && collab.connection !== "offline") return <Loading />;
+
+  const titleBar = (
+    <>
+      <div className="flex items-center gap-1 sm:gap-2">
         <Button variant="ghost" size="icon-sm" aria-label="All documents" title="All documents" onClick={() => navigate("/")}>
           <ArrowLeft />
         </Button>
         <TitleField collab={collab} fallback={props.initialTitle} />
-        <SaveIndicator collab={collab} />
+        <span className="hidden md:inline">
+          <SaveIndicator collab={collab} />
+        </span>
         <div className="ml-auto flex items-center gap-2">
           <PresenceAvatars people={collab.presence} />
         </div>
-      </header>
-      {collab.notice && (
-        <p role="status" className="border-b bg-amber-50 px-4 py-2 text-sm text-amber-900">
-          {collab.notice}
+      </div>
+      {(collab.notice || notice) && (
+        <p role="status" className="mt-1 rounded-md bg-amber-50 px-3 py-1.5 text-sm text-amber-900">
+          {collab.notice ?? notice}
         </p>
       )}
-      {/* Keep the editor mounted through reconnects: Yjs keeps local edits and sends them when the
-          socket is back. Unmounting would drop keystrokes and focus. */}
-      {collab.everSynced || collab.connection === "offline" ? (
-        <Editor collab={collab} readOnly={false} />
-      ) : (
-        <Loading />
-      )}
-    </div>
+    </>
   );
+
+  return <DocumentEditor collab={collab} titleBar={titleBar} onError={setNotice} />;
 }
 
 /** The title lives in the Yjs document, so both people see renames as they type. */
@@ -89,8 +92,9 @@ function TitleField({ collab, fallback }: { collab: Collaboration; fallback: str
 
   return (
     <input
+      id={TITLE_INPUT_ID}
       aria-label="Document title"
-      className="min-w-0 max-w-md flex-1 rounded-md border border-transparent bg-transparent px-2 py-1 text-lg font-medium outline-none hover:border-border focus:border-ring"
+      className="min-w-0 max-w-md flex-1 rounded-md border border-transparent bg-transparent px-2 py-0.5 text-lg outline-none hover:border-border focus:border-ring"
       value={title}
       maxLength={LIMITS.titleLength}
       placeholder={DEFAULT_TITLE}

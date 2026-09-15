@@ -1,6 +1,7 @@
 import { LoaderCircle } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import type { Member } from "../shared/protocol";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { InviteScreen, SignInScreen } from "./auth/AuthScreens";
 import { fetchMe, signOut } from "./auth";
 import { DocumentPage } from "./doc/DocumentPage";
@@ -10,6 +11,14 @@ import { navigate, usePathname } from "./router";
 type AuthState = { status: "loading" } | { status: "signed-out" } | { status: "signed-in"; member: Member };
 
 export default function App() {
+  return (
+    <TooltipProvider delayDuration={400}>
+      <Routes />
+    </TooltipProvider>
+  );
+}
+
+function Routes() {
   const pathname = usePathname();
   const [auth, setAuth] = useState<AuthState>({ status: "loading" });
 

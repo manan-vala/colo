@@ -201,32 +201,117 @@ img.ProseMirror-separator {
   display: block;
 }
 
-/* Document content inside the editor (Tailwind's preflight resets these). */
+/* ---- Document page (M3; real pagination arrives in M4) ---------------------------------- */
+
+.colo-page-zoom {
+  padding: 12px 8px 48px;
+}
+.colo-page {
+  margin: 0 auto;
+  width: 100%;
+  max-width: 816px; /* 8.5in at 96dpi */
+  min-height: 1056px; /* 11in */
+  padding: 40px 20px;
+  background: #fff;
+  color: #000;
+  box-shadow: 0 1px 3px rgb(60 64 67 / 15%), 0 1px 2px rgb(60 64 67 / 30%);
+}
+@media (min-width: 640px) {
+  .colo-page {
+    padding: 96px; /* 1in margins */
+  }
+}
+
+/* ---- Document content --------------------------------------------------------------------- */
+
 .colo-editor {
   outline: none;
-  min-height: 60vh;
+  min-height: 100%;
+  font-family: Arimo, Arial, sans-serif;
   font-size: 11pt;
-  line-height: 1.5;
+  line-height: 1.15;
+  overflow-wrap: break-word;
 }
-.colo-editor > * + * { margin-top: 0.6em; }
-.colo-editor h1 { font-size: 2em; font-weight: 600; line-height: 1.2; margin-top: 0.8em; }
-.colo-editor h2 { font-size: 1.5em; font-weight: 600; line-height: 1.25; margin-top: 0.8em; }
-.colo-editor h3 { font-size: 1.25em; font-weight: 600; margin-top: 0.8em; }
-.colo-editor ul { list-style: disc; padding-left: 1.5em; }
-.colo-editor ol { list-style: decimal; padding-left: 1.5em; }
+.colo-editor p { margin: 0 0 0.5em; }
+.colo-editor h1 { font-size: 20pt; font-weight: 400; margin: 20pt 0 6pt; line-height: 1.15; }
+.colo-editor h2 { font-size: 16pt; font-weight: 400; margin: 18pt 0 6pt; line-height: 1.15; }
+.colo-editor h3 { font-size: 14pt; font-weight: 400; color: #434343; margin: 16pt 0 4pt; }
+.colo-editor h4 { font-size: 12pt; font-weight: 400; color: #666; margin: 14pt 0 4pt; }
+.colo-editor > :first-child { margin-top: 0; }
+
+/* Indent levels from the Indent extension (0.5in steps, as in Docs). */
+.colo-editor [data-indent="1"] { margin-left: 0.5in; }
+.colo-editor [data-indent="2"] { margin-left: 1in; }
+.colo-editor [data-indent="3"] { margin-left: 1.5in; }
+.colo-editor [data-indent="4"] { margin-left: 2in; }
+.colo-editor [data-indent="5"] { margin-left: 2.5in; }
+.colo-editor [data-indent="6"] { margin-left: 3in; }
+.colo-editor [data-indent="7"] { margin-left: 3.5in; }
+.colo-editor [data-indent="8"] { margin-left: 4in; }
+
+.colo-editor ul, .colo-editor ol { padding-left: 0.5in; margin: 0 0 0.5em; }
+.colo-editor ul { list-style: disc; }
+.colo-editor ul ul { list-style: circle; }
+.colo-editor ul ul ul { list-style: square; }
+.colo-editor ol { list-style: decimal; }
+.colo-editor ol ol { list-style: lower-alpha; }
+.colo-editor ol ol ol { list-style: lower-roman; }
 .colo-editor li > p { margin: 0; }
-.colo-editor blockquote { border-left: 3px solid var(--border); padding-left: 1em; color: var(--muted-foreground); }
-.colo-editor code { background: var(--muted); border-radius: 4px; padding: 0.1em 0.3em; font-size: 0.9em; }
-.colo-editor pre { background: var(--muted); border-radius: 6px; padding: 0.75em 1em; font-family: ui-monospace, monospace; }
-.colo-editor hr { border: none; border-top: 1px solid var(--border); margin: 1.5em 0; }
-.colo-editor a { color: #1a73e8; text-decoration: underline; }
+
+.colo-editor ul[data-type="taskList"] { list-style: none; padding-left: 0.25in; }
+.colo-editor ul[data-type="taskList"] li { display: flex; align-items: flex-start; gap: 0.5em; }
+.colo-editor ul[data-type="taskList"] li > label { flex: 0 0 auto; user-select: none; margin-top: 0.15em; }
+.colo-editor ul[data-type="taskList"] li > div { flex: 1 1 auto; min-width: 0; }
+.colo-editor ul[data-type="taskList"] li[data-checked="true"] > div { text-decoration: line-through; color: #80868b; }
+.colo-editor ul[data-type="taskList"] input[type="checkbox"] { width: 1em; height: 1em; accent-color: #1a73e8; }
+
+.colo-editor blockquote { border-left: 3px solid #dadce0; padding-left: 1em; color: #5f6368; }
+.colo-editor code { background: #f1f3f4; border-radius: 3px; padding: 0.1em 0.3em; font-family: Cousine, "Courier New", monospace; font-size: 0.95em; }
+.colo-editor pre { background: #f1f3f4; border-radius: 4px; padding: 0.75em 1em; font-family: Cousine, "Courier New", monospace; }
+.colo-editor pre code { background: none; padding: 0; }
+.colo-editor hr { border: none; border-top: 1px solid #dadce0; margin: 1em 0; }
+.colo-editor a { color: #1155cc; text-decoration: underline; cursor: text; }
+.colo-editor mark { background-color: #ffff00; color: inherit; padding: 0; }
+.colo-editor sup, .colo-editor sub { font-size: 0.75em; line-height: 0; }
+
 .colo-editor p.is-editor-empty:first-child::before {
   content: attr(data-placeholder);
   float: left;
   height: 0;
   pointer-events: none;
-  color: var(--muted-foreground);
+  color: #9aa0a6;
 }
+
+/* Tables (TableKit with column resizing). */
+.colo-editor .tableWrapper { overflow-x: auto; margin: 0.5em 0; }
+.colo-editor table { border-collapse: collapse; table-layout: fixed; width: 100%; margin: 0; overflow: hidden; }
+.colo-editor td, .colo-editor th {
+  position: relative;
+  min-width: 2em;
+  border: 1px solid #000;
+  padding: 5px 7px;
+  vertical-align: top;
+  box-sizing: border-box;
+}
+.colo-editor th { font-weight: 700; text-align: left; background: #f8f9fa; }
+.colo-editor td > p, .colo-editor th > p { margin: 0; }
+.colo-editor .selectedCell::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgb(26 115 232 / 15%);
+  pointer-events: none;
+}
+.colo-editor .column-resize-handle {
+  position: absolute;
+  top: 0;
+  right: -2px;
+  bottom: -2px;
+  width: 4px;
+  background: #1a73e8;
+  pointer-events: none;
+}
+.colo-editor.resize-cursor { cursor: col-resize; }
 
 /* Remote cursors from @tiptap/extension-collaboration-caret (colours are set via element.style). */
 .collaboration-carets__caret {
@@ -245,6 +330,7 @@ img.ProseMirror-separator {
   padding: 0.05rem 0.35rem;
   border-radius: 4px 4px 4px 0;
   color: #fff;
+  font-family: var(--font-sans);
   font-size: 0.75rem;
   font-weight: 600;
   line-height: normal;
