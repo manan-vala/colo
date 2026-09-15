@@ -1,11 +1,11 @@
 # Colo — Build & Deployment Plan
 
-**Status:** Draft v3.1
+**Status:** Draft v4
 **Date:** 15 September 2026
 **Owner:** SWC
 **Platform:** Cloudflare Workers (Free plan)
 **Scale target:** 1–2 monthly active users (personal project)
-**Cost target:** $0/month, hard-capped (no payment method on the account)
+**Cost target:** $0/month, hard-capped (no payment method on the account); no paid third-party services or add-ons
 
 ---
 
@@ -16,45 +16,47 @@
 | v1 | 13 Sep 2026 | First draft on AWS serverless: S3 + CloudFront, Cognito, AppSync, DynamoDB |
 | v2 | 13 Sep 2026 | Corrected AWS Free Tier assumptions; shared-workspace access model; app named Colo (commit `be40456`) |
 | v3 | 14 Sep 2026 | **Moved to Cloudflare.** One Durable Object holds all data (SQLite) and the WebSocket hub; invite-only passkey sign-in on `*.workers.dev`. Rationale: [ADR 0001](decisions/0001-move-from-aws-to-cloudflare.md) and [ADR 0002](decisions/0002-passkey-auth-on-workers-dev.md) |
-| v3.1 | 15 Sep 2026 | **Corrections from building M0.** Styling is Tailwind CSS v4 + shadcn/ui instead of plain CSS (§6). Schema version is kept in a `schema_version` table because Durable Object SQLite rejects `PRAGMA user_version` (§3.3). Tests use `@cloudflare/vitest-plugin`, the renamed `vitest-pool-workers` (§7). `wrangler.jsonc` keys confirmed against Wrangler 4.131 (§7) |
+| v3.1 | 15 Sep 2026 | Corrections from building M0: Tailwind CSS v4 + shadcn/ui; `schema_version` table because Durable Object SQLite rejects `PRAGMA user_version`; `@cloudflare/vitest-plugin`; `wrangler.jsonc` keys confirmed against Wrangler 4.131. M0 deployed (commit `bd7f987`) |
+| v4 | 15 Sep 2026 | **From shared notes to a collaborative document editor in the style of Google Docs.** Tiptap 3 + Yjs; one Document Durable Object per document on `y-partyserver`; real pages, comments, images, restore points, DOCX import/export; new cost model and milestones. Rationale and research: [ADR 0003](decisions/0003-collaborative-document-engine.md) |
 
-The AWS design is no longer part of this plan; it remains readable in git history at commit `be40456`.
+Earlier designs remain readable in git history.
 
 ---
 
 ## 1. What we are building
 
-**Colo** is a browser-based collaborative notes application. Two people sign in with their own passkeys, see a shared set of notes, and edit them — with changes appearing on the other person's screen in near real time rather than requiring a manual refresh.
+**Colo** is a private, browser-based document editor for two people. Both sign in with their own passkeys, see a shared set of documents, and edit them at the same time — typing in the same paragraph, seeing each other's cursors, leaving comments — in a paged layout that looks and works like Google Docs.
 
-The whole thing runs on Cloudflare's Workers Free plan. There is no server, container or database to patch, nothing is billed while idle, and no payment method is attached to the account — so the monthly bill is $0 by construction. The price of that guarantee is that if a daily free limit is ever exceeded, requests fail until the limits reset at 00:00 UTC (05:30 IST) instead of costing money (§9).
+Everything runs on Cloudflare's Workers Free plan with no payment method attached, so the monthly bill is $0 by construction. If a daily free limit is ever exceeded, requests fail until the limits reset at 00:00 UTC (05:30 IST) instead of costing money (§9). Every library is open source and self-hosted; nothing is sent to third-party services.
 
-### 1.1 In scope (MVP)
+### 1.1 In scope
 
 | # | Capability | Notes |
 |---|---|---|
-| F1 | Passkey sign-in, invite-only | No passwords. An admin issues one-time invite links; there is no public registration |
-| F2 | List all notes | Sorted by last updated |
-| F3 | Create, rename, delete a note | Soft delete (recoverable) |
-| F4 | Edit note body and save | Autosave on an 800 ms debounce, plus explicit save |
-| F5 | Live propagation of saved changes | Other connected clients update within ~1 s (typically much faster) |
-| F6 | Conflict detection | Optimistic concurrency via a `version` column |
-| F7 | "Last edited by X at HH:MM" attribution | Cheap trust signal for two-person editing |
-| F8 | Works on mobile browser | Responsive layout; passkeys work with phone biometrics |
-| F9 | Presence | Who is online and which note they have open — nearly free, because the Durable Object already holds every connection |
+| F1 | Passkey sign-in, invite-only | No passwords; one-time invite links; no public registration (unchanged from v3) |
+| F2 | Document list | Newest first, filter by title, "last edited by X" |
+| F3 | Create, rename, delete documents | Soft delete (recoverable) |
+| F4 | Simultaneous editing | Character-level merging with Yjs; live cursors with names; who is in the document |
+| F5 | Rich formatting | Headings and styles, fonts and sizes, bold/italic/underline/strikethrough, text colour and highlight, links, alignment, bulleted/numbered/check lists, indentation, tables, horizontal rules, undo/redo of your own edits |
+| F6 | Real pages | A4 or Letter pages with margins, headers and footers, page numbers, tables split across pages; print or save as PDF |
+| F7 | Comments | Threads on selected text, replies, resolve and reopen, comments margin |
+| F8 | Images | Upload or paste; compressed in the browser and stored with the document |
+| F9 | Restore points | Automatic and named snapshots of a document; restore any of them |
+| F10 | DOCX import and export | Open a `.docx` as a new document; download any document as `.docx` |
+| F11 | Outline | Heading-based navigation panel |
+| F12 | Save status | "Saving…", "All changes saved", "Offline — changes will sync" |
+| F13 | Mobile browser | Continuous (unpaged) layout and a compact toolbar on narrow screens |
+| F14 | Backup export | Member-only download of all documents |
 
-### 1.2 Explicitly out of scope (v1)
+### 1.2 Out of scope (for now)
 
-Rich text formatting beyond Markdown, file/image attachments, folders or tags, full-text search across notes, offline-first sync, sharing with people outside the two-user pool, and a custom domain. Each is a deliberate deferral; see §12.
+Suggesting mode (track changes), full-text search across documents, offline-first editing, folders or tags, per-document sharing or roles, sharing outside the two-person pool, @mentions and notifications, PDF import, Word-identical layout fidelity, and a custom domain. Each is a deliberate deferral; see §12.
 
-### 1.3 The one genuinely open design question
+### 1.3 Honest limits of the approach
 
-"Real time" means two different things:
-
-**Tier A — live propagation on save (planned for v1).** You type, the app autosaves after a pause, and the other person's view updates within about a second. The Durable Object that performs the save immediately pushes the new note to every other open connection.
-
-**Tier B — simultaneous character-level co-editing (deferred to M5).** Google Docs behaviour: both people type in the same sentence at once and neither loses keystrokes. This needs a CRDT — [Yjs](https://github.com/yjs/yjs) is the standard choice. On Cloudflare it fits the existing design without new services: the same Durable Object holds each note's Yjs document, merges updates server-side and persists them to SQLite, and the editor becomes CodeMirror 6 with `y-codemirror.next`.
-
-**Recommendation:** build Tier A, use it for a couple of weeks, and only then decide whether Tier B earns its extra frontend complexity.
+- **Pages are a visual layout, not a word-processor layout engine.** They look like A4 pages and print as pages, but a DOCX exported from Colo and opened in Word will not be pixel-identical, and vice versa.
+- **Several Google Docs features are built by us** (comments, DOCX conversion, restore points, "Page X of Y"), because the ready-made versions in the editor ecosystem are paid (ADR 0003).
+- **Mobile is the weakest platform** for rich-text editing in any browser editor; expect rough edges with some Android keyboards.
 
 ---
 
@@ -62,258 +64,267 @@ Rich text formatting beyond Markdown, file/image attachments, folders or tags, f
 
 ```mermaid
 flowchart LR
-    U["Browser<br/>React SPA"]
+    U["Browser<br/>React + Tiptap + Yjs"]
 
     subgraph cf["Cloudflare - Workers Free plan"]
         SA["Static Assets<br/>SPA bundle"]
-        W["Colo Worker<br/>/api router"]
-        DO[("Workspace Durable Object<br/>SQLite + WebSocket hub")]
+        W["Colo Worker<br/>/api router + auth handoff"]
+        WS[("Workspace Durable Object<br/>members, passkeys, sessions,<br/>document index")]
+        D1[("Document Durable Object<br/>one per document<br/>Yjs state, comments, images,<br/>restore points")]
     end
 
     U -->|"HTTPS: app shell"| SA
-    U -->|"HTTPS: /api auth, me, export"| W
-    U <-->|"WebSocket: /api/ws"| W
-    W -->|"forwards every /api request"| DO
+    U -->|"HTTPS: /api auth, docs, images"| W
+    U <-->|"WebSocket: /api/docs/:id/ws<br/>Yjs sync + cursors"| W
+    W -->|"auth, document list"| WS
+    W -->|"authorised socket, images,<br/>restore points"| D1
+    D1 -.->|"title / last edited<br/>(throttled RPC)"| WS
+    WS -.->|"close sessions on logout,<br/>delete document"| D1
 ```
 
-Everything is served from one hostname, `colo.<subdomain>.workers.dev`, so there is no CORS and the session cookie is first-party.
+Everything is served from one hostname, `colo.manan-vala.workers.dev`, so there is no CORS and the session cookie is first-party.
 
 ### 2.1 Component responsibilities
 
 | Component | Responsibility | Why this one |
 |---|---|---|
-| **Workers Static Assets** | Serves the built SPA (`index.html`, hashed JS/CSS), SPA routing fallback, `_headers` for cache and security headers | Free and unlimited; static requests never invoke the Worker |
-| **Colo Worker** | Forwards `/api/*` to the Workspace Durable Object; adds security headers to API responses. Nothing else | Keeping it a ~30-line router means the Free plan's 10 ms CPU limit per invocation never matters |
-| **Workspace Durable Object** (one instance, named `default`) | All state in its embedded SQLite: members, passkeys, sessions, invites, notes. Authentication, note operations, WebSocket connections, broadcast, presence | Single-threaded, so a write and its broadcast happen in one serialized step; hibernating WebSockets cost nothing while idle |
+| **Workers Static Assets** | Serves the built SPA, SPA routing fallback, `_headers` for cache and security headers | Free and unlimited; static requests never invoke the Worker |
+| **Colo Worker** | Routes `/api/*`. For document routes, asks Workspace to authorise the session, then forwards to that document's Durable Object with the member's identity in a header it controls. Adds security headers | Stays tiny, so the Free plan's 10 ms CPU limit never matters (waiting on Durable Object calls is not CPU time) |
+| **Workspace Durable Object** (one, named `default`) | Members, passkeys, invites, sessions, auth challenges; the document index (title, created, last edited, deleted); which sessions have which documents open, for revocation | One small database for identity and the list; unchanged from v3 for auth |
+| **Document Durable Object** (one per document, named by document ID) | The live Yjs document and its WebSockets (via `y-partyserver`, hibernating); saves the Yjs state to its SQLite; images; restore points; enforces message size and rate caps | Each document's memory, storage and CPU are isolated; the proven `y-partyserver` library does the sync protocol |
 | **Workers Logs** | Request and exception logs | Free: 200,000 events/day, 3-day retention |
-| **Workers Builds** (M4) | Build and deploy on push to GitHub | Free: 3,000 build minutes/month; no Cloudflare API token stored in GitHub |
+| **Workers Builds** (M8) | Build and deploy on push to GitHub | Free: 3,000 build minutes/month |
 
-### 2.2 Why one Durable Object instead of D1 plus a Durable Object
+### 2.2 Key design choices
 
-The obvious Cloudflare design is D1 for storage and a Durable Object only for fanning out updates. Colo instead keeps everything in one Durable Object:
+**Yjs instead of save-and-broadcast.** Yjs is a CRDT: every keystroke becomes a small update that merges deterministically on every client, so two people typing in the same sentence never lose characters and no conflict banner is needed. The server relays updates and keeps the merged state.
 
-- **One place holds the data.** Durable Objects carry their own SQLite database, so D1 adds nothing but a second service and a second call.
-- **No race between saving and broadcasting.** The object processes one event at a time, so `UPDATE … WHERE version = ?` and "send to the other sockets" happen atomically from the clients' point of view.
-- **Edits arrive as WebSocket messages.** Incoming WebSocket messages are billed at a 20:1 ratio against Durable Object requests, so autosaves cost a twentieth of what the same number of HTTP requests would.
-- **No echo-suppression IDs.** The object knows which socket sent an edit and simply broadcasts to all the others.
-- **The Worker stays trivial.** WebAuthn verification and session checks run inside the Durable Object, whose CPU limit is 30 seconds per request rather than 10 ms.
-- **Tier B needs no new infrastructure** (§1.3).
+**One Durable Object per document rather than one for everything.** A single object would hold every open document in one isolate's memory and serialise all of them on one thread. Per-document objects isolate a large or busy document, let us use `y-partyserver` (built for one document per object), and cost nothing extra while idle because hibernating objects are not billed for duration. The price is a cross-object authorisation step on connect and throttled metadata updates to Workspace.
 
-The trade-offs, accepted knowingly:
+**Whole-state saves on a debounce.** Instead of appending every update as a row (which would spend the 100,000 rows/day budget on keystrokes), the Document object writes the complete Yjs state as one row (chunked above 1.9 MB) at most every 2–10 seconds. The spike measured one row written per save regardless of edit count (ADR 0003). If the object dies before a save, connected clients re-send the missing edits when they reconnect — verified in the same spike.
 
-- **Data is only reachable through the object.** There is no `wrangler d1 execute`-style ad-hoc SQL; inspection and backup go through `/api/export` (§4.1).
-- **One object lives in one location.** It is placed near its first request; the Worker passes `locationHint: "apac"` so it lands close to both users.
-- **Single-threaded throughput** is thousands of simple SQLite operations a second — orders of magnitude more than two people can generate.
+**Comments inside the Yjs document.** Thread data lives in a `Y.Map` next to the content, anchored by a `comment` mark on the text. Comments therefore sync, persist, travel with edited text and appear in restore points with no extra protocol.
 
-Why the login is custom passkeys rather than Cloudflare Access is recorded in [ADR 0002](decisions/0002-passkey-auth-on-workers-dev.md): Worker-level Access does not support WebSocket connections, and hostname-based Access needs a custom domain.
+**Browser-side DOCX conversion.** Import and export run in the browser with open-source libraries, so they cost no Worker CPU and need no server-side document model.
+
+**Why not D1 or R2.** Durable Objects already carry SQLite, so D1 would add a second service without benefit. R2 has a free tier but requires adding a payment method to the account, which would end the $0 hard cap; images are small enough to store in the Document object's SQLite (§3.2).
 
 ### 2.3 Key request flows
 
-**App load.** Browser requests `https://colo.<subdomain>.workers.dev/` → Static Assets serve `index.html` and bundles without running the Worker → SPA calls `GET /api/me` → `401` shows the sign-in screen; `200` opens the WebSocket.
+**App load.** Static Assets serve the SPA → `GET /api/me` → `401` shows sign-in; `200` shows the document list from `GET /api/docs`.
 
-**Invite (first time for each person).** Admin runs `npm run invite -- --email … --name …` → the script calls `POST /api/admin/invites` with the `ADMIN_TOKEN` secret → the object creates the member if new, stores the SHA-256 hash of a random invite token, and returns `https://colo.<subdomain>.workers.dev/invite#<token>` → admin sends the link privately → the invitee opens it; the SPA reads the token from the URL fragment (never sent to the server in the URL, so never logged) → `POST /api/auth/register/options` → browser creates a passkey (Face ID, fingerprint or device PIN) → `POST /api/auth/register/verify` → the object verifies it, stores the public key, marks the invite used, creates a session and sets the cookie.
+**Invite, registration, sign-in, sign-out.** As in v3 (§5): one-time invite links in the URL fragment, WebAuthn registration and discoverable-credential sign-in, hashed session cookie.
 
-**Sign-in.** `POST /api/auth/login/options` returns a challenge with no username (discoverable credentials) → browser shows the passkey prompt → `POST /api/auth/login/verify` → the object finds the credential, verifies the signature, creates a session and sets the cookie.
+**Open a document.**
+1. SPA opens `wss://…/api/docs/<id>/ws` through `y-partyserver`'s client provider.
+2. Worker checks `Origin`, then calls Workspace `authorizeDocument(cookie, docId)`: session valid, member enabled, document exists and is not deleted. Workspace records `(docId, session)` for revocation and returns the member's ID, name, colour and session expiry.
+3. Worker forwards the upgrade to `DOCUMENT.getByName(docId, { locationHint: "apac" })`, replacing any client-supplied `x-colo-member` header with the authorised identity.
+4. The Document object accepts the socket as hibernatable, stores `{memberId, sessionHash, sessionExpiresAt}` in the connection state, loads the Yjs state from SQLite if it is not in memory, and runs the Yjs sync handshake. Cursors and names flow through Yjs awareness.
 
-**Connect.** SPA opens `wss://…/api/ws` → Worker forwards the upgrade → the object checks the `Origin` header and the session cookie → accepts the socket with tags `member:<id>` and `session:<hash-prefix>` and stores `{memberId, sessionExpiresAt}` as the socket attachment → sends `snapshot` (current member, members list, note summaries without bodies) → broadcasts `presence`.
+**Editing.** Each local change is sent as a Yjs update and relayed to the other sockets. The object saves the merged state 2 s after edits pause, and at least every 10 s during continuous typing. At most once a minute it pushes `title`, `updatedAt` and `updatedBy` to Workspace for the document list.
 
-**Editing.** User types; the client debounces 800 ms, then sends `update` with `expectedVersion` → the object runs `UPDATE notes SET …, version = version + 1 WHERE id = ? AND version = ? AND deleted_at IS NULL` → one row changed: `ack` to the sender and `changed` to every other socket → no row changed: `error` with code `CONFLICT` and the current note, and the client shows the conflict banner rather than silently overwriting.
+**Disconnect, deploy, crash.** The provider reconnects with backoff and re-syncs; any edits the server lost are re-sent from the client. Deploys restart objects, so this path runs routinely.
 
-**Receiving.** On `changed`, the list re-sorts. If that note is open with no unsaved local edits, the editor takes the new version; if there are unsaved edits, the conflict banner offers "keep mine" (resend against the new version) or "take theirs".
+**Hidden tabs.** A tab hidden for 5 minutes disconnects and reconnects when shown again, so forgotten tabs do not keep objects awake (§9.3).
 
-**Disconnect and reconnect.** The client reconnects with exponential backoff (1 s up to 30 s), receives a fresh `snapshot`, and re-fetches the open note with `get`. Deploys restart the object, so this path is exercised routinely.
+**Sign-out and revocation.** Logout (or disabling a member) makes Workspace call `closeSession(sessionHash)` on every Document object recorded for that session; each closes the matching sockets. Sockets also close themselves at `sessionExpiresAt` on their next message.
 
-**Sign-out and revocation.** `POST /api/auth/logout` deletes the session row and closes that session's sockets via `getWebSockets("session:<hash-prefix>")`. Disabling a member closes all of their sockets via the `member:<id>` tag.
+**Delete a document.** Workspace soft-deletes the row and calls `closeAll("deleted")` on the Document object; new connections are refused at authorisation.
+
+**Images.** The browser resizes (longest side ≤ 2048 px) and encodes WebP (≤ 1 MB), `POST`s it to `/api/docs/<id>/images`, and inserts an image node pointing at the returned URL. `GET` requests are served by the Document object with `Cache-Control: private, max-age=31536000, immutable`.
+
+**Restore a point.** The object saves a `pre-restore` point of the current state, then replaces the live document with the snapshot using `y-partyserver`'s `unstable_replaceDocument` (applied as a normal change, so every client receives it).
+
+**DOCX import.** The browser converts the file with `mammoth` to HTML, reads page size and margins from the DOCX with JSZip, creates a new document and sets its content and page settings.
+
+**DOCX export.** The browser serialises the editor's JSON with `docx`, including page size, margins, header/footer text, page-number fields, images, tables and comments, and downloads the file.
 
 ---
 
 ## 3. Data model
 
-All data lives in the Workspace Durable Object's embedded SQLite database. There is one workspace (`default`), and every member can read and edit every note — §1.2 rules out sharing beyond the two-person pool, so per-note permissions would be complexity without a use (D7).
+### 3.1 Workspace Durable Object (SQLite)
 
-### 3.1 Schema
+Auth tables are unchanged from v3: `members`, `passkeys`, `invites`, `sessions`, `auth_challenges` (see git history for v3.1 §3.1). Added:
 
 ```sql
--- Migration 1 (schema_version.version = 1)
-CREATE TABLE members (
-  id            TEXT PRIMARY KEY,                -- ULID
-  email         TEXT NOT NULL UNIQUE COLLATE NOCASE,
-  display_name  TEXT NOT NULL,
-  created_at    TEXT NOT NULL,
-  disabled_at   TEXT
-);
-
-CREATE TABLE passkeys (
-  credential_id TEXT PRIMARY KEY,                -- base64url
-  member_id     TEXT NOT NULL REFERENCES members(id),
-  public_key    BLOB NOT NULL,
-  counter       INTEGER NOT NULL DEFAULT 0,
-  transports    TEXT,                            -- JSON array
-  created_at    TEXT NOT NULL,
-  last_used_at  TEXT
-);
-CREATE INDEX passkeys_by_member ON passkeys(member_id);
-
-CREATE TABLE invites (
-  token_hash    TEXT PRIMARY KEY,                -- SHA-256 of the token; the token itself is never stored
-  member_id     TEXT NOT NULL REFERENCES members(id),
-  expires_at    TEXT NOT NULL,                   -- 24 hours after creation
-  used_at       TEXT
-);
-
-CREATE TABLE sessions (
-  id_hash       TEXT PRIMARY KEY,                -- SHA-256 of the cookie value
-  member_id     TEXT NOT NULL REFERENCES members(id),
-  created_at    TEXT NOT NULL,
-  expires_at    TEXT NOT NULL,                   -- 30 days, sliding
-  last_seen_at  TEXT NOT NULL
-);
-
-CREATE TABLE auth_challenges (
-  id            TEXT PRIMARY KEY,
-  challenge     TEXT NOT NULL,
-  purpose       TEXT NOT NULL CHECK (purpose IN ('register', 'login')),
-  member_id     TEXT,                            -- set for registration
-  expires_at    TEXT NOT NULL                    -- 5 minutes after creation
-);
-
-CREATE TABLE notes (
-  id            TEXT PRIMARY KEY,                -- ULID
+CREATE TABLE documents (
+  id            TEXT PRIMARY KEY,                -- ULID; also the Document Durable Object name
   title         TEXT NOT NULL,
-  body          TEXT NOT NULL DEFAULT '',
-  version       INTEGER NOT NULL DEFAULT 1,
   created_at    TEXT NOT NULL,
   created_by    TEXT NOT NULL REFERENCES members(id),
   updated_at    TEXT NOT NULL,
   updated_by    TEXT NOT NULL REFERENCES members(id),
-  deleted_at    TEXT                             -- NULL on live notes
+  deleted_at    TEXT
 );
-CREATE INDEX notes_live_by_updated ON notes(deleted_at, updated_at);
+CREATE INDEX documents_live_by_updated ON documents(deleted_at, updated_at);
+
+CREATE TABLE document_sessions (                 -- which sessions opened which documents (revocation fan-out)
+  doc_id        TEXT NOT NULL REFERENCES documents(id),
+  session_hash  TEXT NOT NULL REFERENCES sessions(id_hash),
+  connected_at  TEXT NOT NULL,
+  PRIMARY KEY (doc_id, session_hash)
+) WITHOUT ROWID;
 ```
 
-Notes on the design:
+### 3.2 Document Durable Object (SQLite, one database per document)
 
-- **Display names come from a join** (`notes.updated_by → members.display_name`), so renaming a member updates every "last edited by" automatically.
-- **Challenges are stored rows**, not signed cookies, so the app needs no signing secret. Expired challenges, invites and sessions are deleted opportunistically during auth calls; no scheduled job is needed.
-- **Sessions slide** by extending `expires_at` at most once a day per session, to avoid a write on every request.
+```sql
+CREATE TABLE doc_state (                         -- Y.encodeStateAsUpdate(doc), split into chunks
+  seq           INTEGER PRIMARY KEY,
+  data          BLOB NOT NULL                    -- ≤ 1.9 MB (row limit is 2 MB)
+);
 
-### 3.2 Access patterns
+CREATE TABLE doc_meta (
+  id            INTEGER PRIMARY KEY CHECK (id = 1),
+  doc_id        TEXT NOT NULL,
+  state_bytes   INTEGER NOT NULL,
+  saved_at      TEXT NOT NULL,
+  last_pushed_at TEXT                            -- last metadata push to Workspace
+);
 
-| Pattern | Query |
+CREATE TABLE restore_points (
+  id            TEXT PRIMARY KEY,
+  kind          TEXT NOT NULL CHECK (kind IN ('auto', 'named', 'pre-restore', 'import')),
+  label         TEXT,
+  created_at    TEXT NOT NULL,
+  created_by    TEXT,
+  state_bytes   INTEGER NOT NULL
+);
+CREATE TABLE restore_point_chunks (
+  point_id      TEXT NOT NULL REFERENCES restore_points(id),
+  seq           INTEGER NOT NULL,
+  data          BLOB NOT NULL,
+  PRIMARY KEY (point_id, seq)
+) WITHOUT ROWID;
+
+CREATE TABLE images (
+  id            TEXT PRIMARY KEY,
+  mime          TEXT NOT NULL CHECK (mime IN ('image/webp', 'image/png', 'image/jpeg', 'image/gif')),
+  bytes         INTEGER NOT NULL,
+  width         INTEGER,
+  height        INTEGER,
+  created_at    TEXT NOT NULL,
+  created_by    TEXT NOT NULL
+);
+CREATE TABLE image_chunks (
+  image_id      TEXT NOT NULL REFERENCES images(id),
+  seq           INTEGER NOT NULL,
+  data          BLOB NOT NULL,
+  PRIMARY KEY (image_id, seq)
+) WITHOUT ROWID;
+```
+
+A save writes the state chunks with `INSERT OR REPLACE` and deletes chunks beyond the new count, all in one `transactionSync()`. `WITHOUT ROWID` tables keep their primary key as the table itself, so chunk writes add no index rows.
+
+### 3.3 Inside the Yjs document
+
+| Shared type | Contents |
 |---|---|
-| Authenticate a request | `SELECT … FROM sessions JOIN members … WHERE id_hash = ? AND expires_at > now AND disabled_at IS NULL` |
-| List notes, newest first | `SELECT id, title, version, updated_at, updated_by FROM notes WHERE deleted_at IS NULL ORDER BY updated_at DESC` |
-| Fetch one note | `SELECT … FROM notes WHERE id = ? AND deleted_at IS NULL` |
-| Create note | `INSERT INTO notes …` |
-| Update note | `UPDATE notes SET …, version = version + 1 WHERE id = ? AND version = ? AND deleted_at IS NULL` |
-| Delete note | `UPDATE notes SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL` |
-| Find passkey at login | `SELECT … FROM passkeys WHERE credential_id = ?` |
+| `content` (`Y.XmlFragment`) | The Tiptap/ProseMirror document |
+| `settings` (`Y.Map`) | `title`, `pageSize` (`A4` \| `LETTER`), `margins` (mm), `header` and `footer` (left/right plain text with `{page}` / `{total}`), `pagination` on/off |
+| `comments` (`Y.Map`) | `threadId → Y.Map { quote, createdBy, createdAt, resolvedAt, resolvedBy, replies: Y.Array<{ id, authorId, body, createdAt, editedAt, deletedAt }> }` |
 
-### 3.3 Migrations
+Comment anchors are a `comment` mark with a `threadId` attribute (overlapping marks allowed). A thread whose anchor text was deleted is shown as "detached" in the comments panel rather than lost.
 
-The object's constructor runs pending migrations inside `ctx.blockConcurrencyWhile()`, comparing the stored version against the list in `src/worker/db.ts`; each migration runs in `ctx.storage.transactionSync()` together with the update of the stored version. The version lives in a one-row table, `schema_version (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL)`, because Durable Object SQLite does not authorize `PRAGMA user_version` (it fails with `SQLITE_AUTH`). Migrations are forward-only and **additive** (new tables, new nullable columns) so that `wrangler rollback` to the previous code version keeps working against a newer schema (§8.5).
+### 3.4 Migrations
 
-### 3.4 Storage and row budget
+Both object classes run pending migrations in `ctx.blockConcurrencyWhile()` from their constructors, using the `schema_version` table and `migrate()` in `src/worker/db.ts` built in M0. Migrations are forward-only and additive so that `wrangler rollback` keeps working. The Yjs document structure is versioned separately with a `settings.schema` number; the client upgrades older documents on load.
 
-The Free plan allows 5 GB of Durable Object storage in total and 1 GB per object — thousands of times what two people's text notes need. Every row written counts toward the 100,000 rows/day allowance, and **each index row updated counts as an additional row**. An autosave updates the note row plus the `notes_live_by_updated` index, so roughly 2–3 rows per save; §9 shows the resulting headroom.
+### 3.5 Storage and row budget
+
+Text documents are tens to hundreds of kilobytes of Yjs state; images are capped at 1 MB each. Storage per object is 10 GB, and the Free plan caps the account at 5 GB. Row costs per operation are in §9.2.
 
 ---
 
 ## 4. API design
 
-The Worker forwards every `/api/*` request to the Workspace Durable Object. Requests use JSON; note operations travel over the WebSocket.
-
 ### 4.1 HTTP endpoints
 
-| Method and path | Auth | Purpose |
-|---|---|---|
-| `GET /api/health` | None | Liveness check: `{ ok, schemaVersion, colo }`. The runtime does not expose a Durable Object's location, so `colo` is read once per object instance from `https://cloudflare.com/cdn-cgi/trace`; `null` if that lookup fails |
-| `GET /api/me` | Session | Current member; `401` if not signed in |
-| `POST /api/admin/invites` | `Authorization: Bearer <ADMIN_TOKEN>` | Create member (if new) and a one-time invite link. Returns `404` when `ADMIN_TOKEN` is not set |
-| `POST /api/auth/register/options` | Invite token in body | WebAuthn creation options + challenge ID |
-| `POST /api/auth/register/verify` | Invite token + challenge ID | Store passkey, consume invite, set session cookie |
-| `POST /api/auth/login/options` | None | WebAuthn request options + challenge ID |
-| `POST /api/auth/login/verify` | Challenge ID | Verify assertion, set session cookie |
-| `POST /api/auth/logout` | Session | Delete session, close its sockets, clear cookie |
-| `GET /api/export` | Session | Download all notes (including soft-deleted) and member names as JSON |
-| `GET /api/ws` | Session | WebSocket upgrade |
+| Method and path | Handled by | Auth | Purpose |
+|---|---|---|---|
+| `GET /api/health` | Workspace | None | Liveness: `{ ok, schemaVersion, colo }` |
+| `GET /api/me` | Workspace | Session | Current member; `401` if not signed in |
+| `POST /api/admin/invites` | Workspace | `ADMIN_TOKEN` | One-time invite link; `404` when the secret is unset |
+| `POST /api/auth/register/options`, `/register/verify`, `/login/options`, `/login/verify`, `/logout` | Workspace | As in v3 | Passkey ceremonies, session cookie |
+| `GET /api/docs` | Workspace | Session | Live documents, newest first |
+| `POST /api/docs` | Workspace | Session | Create; body `{ title? }` |
+| `PATCH /api/docs/:id` | Workspace → Document | Session | Rename from the list page (applied to `settings.title` in the Yjs document) |
+| `DELETE /api/docs/:id` | Workspace → Document | Session | Soft delete; closes open sockets |
+| `GET /api/docs/:id/ws` | Worker → Document | Session (checked by Workspace) | WebSocket upgrade |
+| `POST /api/docs/:id/images` | Document | Session | Upload one image (≤ 1 MB after compression) |
+| `GET /api/docs/:id/images/:imageId` | Document | Session | Image bytes |
+| `GET /api/docs/:id/restore-points` | Document | Session | List restore points |
+| `POST /api/docs/:id/restore-points` | Document | Session | Create a named restore point |
+| `POST /api/docs/:id/restore-points/:pointId/restore` | Document | Session | Restore (creates a `pre-restore` point first) |
+| `GET /api/export` | Workspace → Documents | Session | Backup: members, document index and each document's Yjs state (base64) |
 
-Every `POST` and the WebSocket upgrade must carry an `Origin` header equal to the configured `ORIGIN`; anything else is rejected with `403`.
+Every `POST`, `PATCH`, `DELETE` and WebSocket upgrade must carry an `Origin` header equal to `ORIGIN`; anything else gets `403`. For document routes, the Worker strips any incoming `x-colo-member` header and sets it only after Workspace authorises the request. Durable Objects are not reachable from the internet except through the Worker.
 
 ### 4.2 WebSocket protocol
 
-Messages are JSON objects with a `type` field; types are shared between client and server in `src/shared/protocol.ts` and validated on the server.
+The document socket speaks the standard Yjs protocols, as implemented by `y-partyserver`:
 
-**Client → server**
-
-| Type | Fields | Result |
+| Channel | Direction | Use |
 |---|---|---|
-| `get` | `reqId`, `noteId` | `ack` with the full note, or `error NOT_FOUND` |
-| `create` | `reqId`, `title` | `ack` to sender, `changed` to others |
-| `update` | `reqId`, `noteId`, `title?`, `body?`, `expectedVersion` | `ack` + `changed`, or `error CONFLICT` with `current` |
-| `delete` | `reqId`, `noteId` | `ack` + `changed` (note carries `deletedAt`) |
-| `viewing` | `noteId` or `null` | `presence` broadcast |
-| `"ping"` (plain text) | — | `"pong"`, answered by the runtime without waking the object |
+| Sync (type 0) | Both | Sync step 1/2 on connect, then incremental document updates |
+| Awareness (type 1) | Both | Cursor position, selection, name, colour; clients renew every 15 s |
+| Custom strings (`__YPS:` prefix) | Server → client | JSON control events: `session-expired`, `document-deleted`, `restored` (by whom), `limit` (`MESSAGE_TOO_LARGE`, `RATE_LIMITED`, `DOCUMENT_TOO_LARGE`) |
 
-**Server → client**
+### 4.3 Authorisation and limits
 
-| Type | Fields | When |
-|---|---|---|
-| `snapshot` | `me`, `members`, `notes` (summaries, no bodies) | Immediately after connecting |
-| `ack` | `reqId`, `note` | Successful request |
-| `error` | `reqId`, `code` (`CONFLICT`, `NOT_FOUND`, `INVALID`, `RATE_LIMITED`, `UNAUTHORIZED`), `current?` | Failed request |
-| `changed` | `note`, `byName` | Another socket changed a note |
-| `presence` | `online` (member IDs), `viewing` (member ID → note ID) | Connect, disconnect, `viewing` |
-
-### 4.3 Authorization and limits
-
-- **Session on connect, attachment afterwards.** The session is checked when the socket opens. Afterwards the object trusts the socket's attachment until `sessionExpiresAt`, then closes it with code `4001` so the client re-authenticates. Logout and member disabling close sockets immediately (§2.3), so no per-message database read is needed.
-- **Rate cap.** Each socket may send at most 20 messages per 10 seconds; excess messages get `error RATE_LIMITED` and are not processed. This bounds the damage of a client bug to a small fraction of the daily free allowance.
-- **Size cap.** Note bodies are limited to 512 KB and titles to 200 characters; larger values get `error INVALID`.
-- **Hibernation-friendly code.** The object keeps no in-memory timers or intervals, which would prevent hibernation. Rate-limit counters live in the socket attachment; heartbeats use `ctx.setWebSocketAutoResponse()`.
+- **Trust model.** Every member can read and edit every document (D7). Comment authorship and cursor names are set by clients from `/api/me` and are not cryptographically enforced; this is acceptable for two trusted people, and the server-side identity in each connection is used for logs, restore points and metadata.
+- **Session checks.** Checked by Workspace on connect; afterwards the connection state carries `sessionExpiresAt`, and the object closes the socket with code `4001` on the first message after expiry. Logout and disabling a member close sockets immediately (§2.3).
+- **Caps (per connection, enforced in the Document object before Yjs processing).**
+  - Message size ≤ 1 MB (images use HTTP, not Yjs).
+  - ≤ 60 messages per 10 seconds sustained, bursts allowed; counters live in the connection state so they survive hibernation.
+  - Document state ≤ 25 MB; beyond that the document becomes read-only with a `DOCUMENT_TOO_LARGE` notice.
+- **Image validation.** The object checks the file signature matches the declared type and rejects SVG (script risk).
 
 ---
 
 ## 5. Authentication design
 
-**Passkeys (WebAuthn), invite-only.** Passkeys are phishing-resistant, need no password storage, and verifying one is a cheap signature check. Library: `@simplewebauthn/server` in the Durable Object and `@simplewebauthn/browser` in the SPA.
+Unchanged from v3 ([ADR 0002](decisions/0002-passkey-auth-on-workers-dev.md)): invite-only passkeys with `@simplewebauthn/server` (M1 spike confirms it runs in workerd; WebCrypto fallback), discoverable credentials, user verification required, `__Host-colo_session` cookie with a 30-day sliding expiry stored as a SHA-256 hash, `Origin` checks, and an `ADMIN_TOKEN` secret deleted after both users enrol. Relying party ID `colo.manan-vala.workers.dev`; passkeys are bound to that hostname.
 
-- **Relying party.** `RP_ID` is the full hostname `colo.<subdomain>.workers.dev`; `ORIGIN` is `https://` plus that. Locally both use `localhost`, which browsers treat as a secure context.
-- **Registration options.** Discoverable credential required (enables username-less sign-in), user verification required, attestation `none`, algorithms ES256 and RS256 (Windows Hello uses RS256).
-- **Counters.** Many synced passkeys always report a counter of `0`; the server accepts `0` but rejects a counter that goes backwards once it is non-zero.
-- **Invites.** 32 random bytes, base64url, delivered in the URL fragment, single use, valid for 24 hours, stored only as a SHA-256 hash.
-- **Sessions.** Cookie `__Host-colo_session` holding 32 random bytes; attributes `HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=2592000`. Only the SHA-256 hash is stored. 30-day sliding expiry.
-- **CSRF and cross-site WebSocket hijacking.** `SameSite=Strict` plus the `Origin` check on every `POST` and on the WebSocket upgrade.
-- **Admin token.** `ADMIN_TOKEN` is a Worker secret (≥ 32 random bytes) used only to create invites, compared in constant time. After both users are enrolled, delete it (`wrangler secret delete ADMIN_TOKEN`); the invite endpoint then returns `404` until the secret is set again.
-- **More devices.** Synced passkeys (iCloud Keychain, Google Password Manager, 1Password and similar) usually cover a person's devices. Otherwise the admin issues a fresh invite for the existing email, which adds another passkey to the same member.
-- **Recovery.** Same as adding a device: a new invite for the existing member. Old passkeys can be removed from the member's settings (M4).
-- **Runtime check.** SimpleWebAuthn's documentation lists Node 22+ and Deno 2.4+ but not Workers. The first task of M1 is a spike confirming it runs in workerd (with the `nodejs_compat` flag if needed). Fallback: verify ES256/RS256 assertions directly with WebCrypto, which Workers support natively.
-- **Hostname-bound passkeys.** Passkeys only work on the hostname they were created for. Moving to a custom domain later (D4) means both users enroll new passkeys through fresh invites — a two-minute job at this scale, but worth knowing before choosing the `workers.dev` subdomain.
+Added in v4: document socket authorisation through Workspace, the `document_sessions` revocation fan-out, and session expiry enforcement inside Document objects (§2.3, §4.3).
 
 ---
 
 ## 6. Frontend
 
+### 6.1 Stack
+
 | Choice | Selection | Rationale |
 |---|---|---|
-| Framework | React 19 + TypeScript | Well supported; matches Tier B editor bindings |
-| Build tool | Vite + `@cloudflare/vite-plugin` | `vite dev` runs the Worker and Durable Object in workerd locally; one package for client and server |
-| Auth | `@simplewebauthn/browser` | Passkey prompts across browsers |
-| Realtime client | Small WebSocket wrapper (~150 lines) | Reconnect with backoff, `"ping"` every 30 s, request/`ack` matching by `reqId`, resync on reconnect |
-| State | React state + a small external store (`useSyncExternalStore`) | No state library needed for one list and one open note |
-| Editor (v1) | Controlled `<textarea>` with Markdown preview | Minimal; sufficient for Tier A |
-| Markdown | `marked` + `DOMPurify` | Output is always sanitised before rendering |
-| Editor (M5) | CodeMirror 6 + `y-codemirror.next` | Only if Tier B is built; suits Markdown better than a rich-text editor |
-| Styling | Tailwind CSS v4 (`@tailwindcss/vite`) + shadcn/ui (Radix primitives, Nova preset, Geist font bundled from npm) | Accessible dialogs, menus and sheets without hand-rolled focus handling; components are copied into `src/client/components/ui/` and owned by the repo. Added only as each milestone needs them |
-| Tests | Vitest 4.1 + `@cloudflare/vitest-plugin` | Tests run inside workerd with real Durable Objects and SQLite. The plugin does not support Vitest 5 yet |
+| Framework | React 19 + TypeScript | Matches Tiptap's React bindings |
+| Build tool | Vite 8 + `@cloudflare/vite-plugin` | Runs the Worker and both Durable Object classes in workerd during `npm run dev` |
+| UI components | Tailwind CSS v4 + shadcn/ui (Radix, Nova preset) | Menus, dropdowns, popovers, dialogs, sheets and tooltips for a Docs-style shell |
+| Editor | Tiptap 3 (MIT): StarterKit (with Tiptap's own undo/redo disabled), Collaboration, CollaborationCaret, TextStyle (font family, size, colour), Highlight, TextAlign, TaskList, Image, TableOfContents, UniqueID, DragHandle, Placeholder, Subscript/Superscript | Headless, so the UI is ours; most widely used Yjs binding; all listed extensions are MIT |
+| Real pages | `tiptap-pagination-plus` + `tiptap-table-plus` (MIT) | Decoration-only pagination that is safe with Yjs; tables split across pages (spike, ADR 0003). Fork or vendor if they stall |
+| Collaboration client | `yjs` + `y-partyserver/provider` | Reconnect, resync and awareness handled by the library |
+| Comments | Our code: `comment` mark + `Y.Map` threads + margin cards | Tiptap Comments is paid |
+| DOCX | `mammoth` (import), `docx` (export), JSZip (page settings) | Open source, browser-side |
+| Auth | `@simplewebauthn/browser` | Passkey prompts |
+| Fonts | Self-hosted, metric-compatible open fonts via `@fontsource` (e.g. Arimo, Tinos, Carlito, Caladea) plus Geist for the UI | No font CDN (CSP, privacy); closer DOCX layout; availability confirmed in M3 |
+| Tests | Vitest 4.1 + `@cloudflare/vitest-plugin`; puppeteer-core with the local Chrome for editor smoke tests | Real Durable Objects and SQLite in tests; headless checks of pagination and sync |
 
-**SPA routing.** `assets.not_found_handling = "single-page-application"` serves `index.html` for unknown paths such as `/invite` or `/notes/<id>`.
+### 6.2 Layout (Google Docs–style, Colo branding)
 
-**Headers for static assets** come from `public/_headers`:
+- **Home:** document list (title, last edited by and when), title filter, "Blank document", "Import .docx".
+- **Document top bar:** home link, editable title, save status, avatars of people in the document, comments toggle.
+- **Menu bar:** File (new, import DOCX, download DOCX, print / save as PDF, page setup, restore points), Edit (undo, redo), Insert (image, table, link, page break, horizontal line, comment), Format (text styles, alignment, lists, clear formatting).
+- **Toolbar:** undo, redo, print, zoom, style (Normal/Title/Headings), font, size, bold, italic, underline, strikethrough, text colour, highlight, link, comment, image, alignment, check/bulleted/numbered lists, indent, clear formatting.
+- **Canvas:** grey background with white A4/Letter pages, headers, footers and page numbers; outline panel on the left; comment cards aligned to their anchors on the right.
+- **Narrow screens:** pagination off (continuous page), compact toolbar in a bottom sheet, comments in a sheet.
+
+### 6.3 Security headers
+
+`public/_headers` for static assets:
 
 ```
 /*
-  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'
   X-Content-Type-Options: nosniff
   Referrer-Policy: same-origin
   Permissions-Policy: camera=(), microphone=(), geolocation=()
@@ -325,19 +336,19 @@ Messages are JSON objects with a `type` field; types are shared between client a
   Cache-Control: public, max-age=31536000, immutable
 ```
 
-`_headers` does not apply to responses generated by Worker code, so the Worker adds the same security headers to `/api` responses itself (except `101` WebSocket upgrades), plus `Cache-Control: no-store` when the object sets none.
-
-**CSP and shadcn/ui.** Build output has no inline scripts or styles, so the policy above holds for M0 (verified under `vite preview`). Some Radix-based components inject `<style>` elements at runtime — the scroll lock used by `Dialog`, `Sheet` and `Select`, and the `Sonner` toast library. When the first such component is added, check the browser console for CSP violations; if they appear, relax only `style-src` to `'self' 'unsafe-inline'` (in `_headers` and the Worker), keep `script-src 'self'`, and configure DOMPurify to strip `style` attributes from rendered Markdown. HTTPS is enforced for the whole `.dev` top-level domain by browsers' HSTS preload list.
+- **`style-src 'unsafe-inline'` is required** because `tiptap-pagination-plus` and Radix insert `<style>` elements (verified in the spike). `script-src` stays `'self'`, which also blocks inline event handlers. Tiptap's own injected CSS is disabled (`injectCSS: false`) and shipped as a stylesheet. The change lands in M3, when the editor arrives; M0's policy stays strict until then.
+- **Header/footer text is plain text**, escaped before it reaches pagination-plus (which renders HTML), so a document cannot inject markup through page settings.
+- `_headers` does not apply to Worker responses, so the Worker adds the same headers to `/api` responses (except `101` upgrades), plus `Cache-Control: no-store` unless the object sets one.
 
 ---
 
 ## 7. Project structure and configuration
 
-**One npm package, no workspaces.** The Vite plugin builds the client and the Worker together.
+**One npm package, no workspaces.**
 
 ```
 colo/
-  package.json              # scripts: dev, build, preview, test, deploy, cf-typegen (+ invite in M1)
+  package.json              # scripts: dev, build, preview, test, deploy, cf-typegen, invite
   wrangler.jsonc
   worker-configuration.d.ts # generated by `npm run cf-typegen`; committed
   vite.config.ts            # react + tailwind + cloudflare plugins; @ -> src/client
@@ -348,26 +359,35 @@ colo/
   public/
     _headers
   src/
-    client/                 # React SPA: main.tsx, App.tsx, ws.ts, auth.ts, editor/
+    client/
+      main.tsx, App.tsx, auth.ts
       components/ui/        # shadcn/ui components
+      home/                 # document list, import
+      doc/                  # document shell: top bar, menus, toolbar, outline, comments panel
+      editor/               # Tiptap setup, extensions (comment mark, image, page settings), pagination
+      collab/               # provider setup, hidden-tab disconnect, save status
+      docx/                 # import (mammoth) and export (docx)
       lib/utils.ts
     worker/
-      index.ts              # router: /api/* -> Workspace Durable Object
-      workspace.ts          # Workspace Durable Object class
+      index.ts              # router + auth handoff
+      workspace.ts          # Workspace Durable Object
       auth.ts               # invites, passkeys, sessions
-      notes.ts              # note operations
+      documents.ts          # document index, authorisation, revocation fan-out
+      document.ts           # Document Durable Object (y-partyserver YServer)
+      storage.ts            # chunked state, images, restore points
       db.ts                 # migrations
     shared/
-      protocol.ts           # WebSocket message types
+      protocol.ts           # HTTP types, control events, limits
+      doc-schema.ts         # Yjs document structure and settings types
   scripts/
-    invite.ts               # calls POST /api/admin/invites
-  test/                     # vitest + @cloudflare/vitest-plugin
+    invite.ts
+  test/
   docs/
     colo-plan.md
     decisions/
 ```
 
-**`wrangler.jsonc`** (key names confirmed against the Wrangler 4.131 schema in M0; `exports` is the current declarative replacement for the `migrations` array, and a Worker can use only one of the two):
+**`wrangler.jsonc`** (v4 adds the Document class):
 
 ```jsonc
 {
@@ -382,10 +402,14 @@ colo/
     "run_worker_first": ["/api/*"]
   },
   "durable_objects": {
-    "bindings": [{ "name": "WORKSPACE", "class_name": "Workspace" }]
+    "bindings": [
+      { "name": "WORKSPACE", "class_name": "Workspace" },
+      { "name": "DOCUMENT", "class_name": "Document" }
+    ]
   },
   "exports": {
-    "Workspace": { "type": "durable-object", "storage": "sqlite" }
+    "Workspace": { "type": "durable-object", "storage": "sqlite" },
+    "Document": { "type": "durable-object", "storage": "sqlite" }
   },
   "vars": {
     "RP_ID": "colo.manan-vala.workers.dev",
@@ -395,24 +419,9 @@ colo/
 }
 ```
 
-- **SQLite storage is mandatory** on the Free plan; key-value-backed Durable Objects are not available.
-- **`preview_urls: false`** makes explicit what Cloudflare already does for Workers with Durable Objects.
+- **`y-partyserver` peer dependency:** version 2.2.0 declares `@cloudflare/workers-types@^4` while Wrangler 4.131 wants v5. Add an npm `overrides` entry rather than `--legacy-peer-deps`.
+- **npm:** `npm ci` works with npm 11; add packages with `npx npm@latest install <pkg>` (npm 11.5 crashes on Vite 8's optional peers).
 - Local overrides (`RP_ID=localhost`, `ORIGIN=http://localhost:5173`, a local `ADMIN_TOKEN`) go in `.dev.vars`, which is git-ignored.
-
-**Worker router** (full version in `src/worker/index.ts`):
-
-```ts
-export { Workspace } from "./workspace";
-
-export default {
-  async fetch(request, env) {
-    if (!new URL(request.url).pathname.startsWith("/api/")) return notFound();
-    const stub = env.WORKSPACE.getByName("default", { locationHint: "apac" });
-    const response = await stub.fetch(request);
-    return response.webSocket ? response : withSecurityHeaders(response);
-  },
-} satisfies ExportedHandler<Env>;
-```
 
 ---
 
@@ -420,46 +429,38 @@ export default {
 
 ### 8.1 Prerequisites
 
-- A free Cloudflare account. No payment method is needed, and leaving none attached is what guarantees the $0 bill.
-- Node.js 22+ (the repo pins 24 in `.nvmrc`). Wrangler is a dev dependency, run via `npx wrangler`.
-- npm: `npm ci` works with npm 11. Adding packages with npm 11.5 can crash with `Cannot read properties of null (reading 'edgesOut')` (a peer-resolution bug triggered by Vite 8's optional devtools peers); use `npx npm@latest install <pkg>` instead.
-- A passkey-capable device for each user: any current phone, or a laptop with Touch ID / Windows Hello / a password manager.
-- **Choose the account's `workers.dev` subdomain before anyone enrolls a passkey.** The app URL becomes `colo.<subdomain>.workers.dev`, and passkeys are bound to it (§5).
+- A free Cloudflare account with no payment method.
+- Node.js 22+ (`.nvmrc` pins 24). Wrangler is a dev dependency, run via `npx wrangler`.
+- A passkey-capable device for each user.
+- The `workers.dev` subdomain is fixed (`manan-vala`), and passkeys will be bound to `colo.manan-vala.workers.dev`.
 
-### 8.2 First deployment — ordered steps
+### 8.2 First deployment
+
+Done for M0 on 15 September 2026. From M1 onwards:
 
 ```bash
-# 1. Install and authenticate
-npm ci
-npx wrangler login
+npm run deploy
+curl https://colo.manan-vala.workers.dev/api/health
 
-# 2. Build and deploy the Worker, Durable Object and static assets
-npm run deploy                     # vite build && wrangler deploy
-curl https://colo.<subdomain>.workers.dev/api/health
-
-# 3. Set the admin secret (keep a copy in your password manager)
+# Admin secret, invites, then remove the secret (Git Bash on Windows provides openssl)
 openssl rand -base64 32 | npx wrangler secret put ADMIN_TOKEN
-
-# 4. Invite both users; each command prints a one-time link valid for 24 hours
-COLO_ADMIN_TOKEN=<token> npm run invite -- --email you@example.com --name "Alex"
-COLO_ADMIN_TOKEN=<token> npm run invite -- --email them@example.com --name "Sam"
-
-# 5. After both passkeys are enrolled, disable invites
+COLO_ADMIN_TOKEN=<token> npm run invite -- --email <email> --name "<name>"
 npx wrangler secret delete ADMIN_TOKEN
 ```
 
 ### 8.3 Routine deploys
 
-`npm run deploy` uploads the Worker, the Durable Object class and the static assets as one new version. Deploying restarts the Durable Object, which closes open WebSockets; clients reconnect and resync automatically (§2.3). Pending schema migrations run when the object restarts.
+`npm run deploy` uploads the Worker, both Durable Object classes and the static assets as one version. Deploying restarts objects and closes sockets; clients reconnect, re-sync and re-send unsaved edits (§2.3).
 
-### 8.4 CI/CD (M4)
+### 8.4 CI/CD (M8)
 
-Push the repo to a private GitHub repository and connect it with **Workers Builds**: build command `npm ci && npm test && npm run build`, deploy command `npx wrangler deploy`, production branch `main`. The Free plan includes 3,000 build minutes a month with one concurrent build and a 20-minute timeout. Because Cloudflare pulls from GitHub, no Cloudflare API token has to be stored as a GitHub secret.
+Private GitHub repository connected to **Workers Builds**: build `npm ci && npm test && npm run build`, deploy `npx wrangler deploy`, production branch `main`.
 
 ### 8.5 Rollback and restore
 
-- **Code:** `npx wrangler rollback` returns to the previous version in seconds. Because migrations are additive-only (§3.3), older code keeps working against the newer schema.
-- **Data:** the member-only `/api/export` endpoint downloads everything as JSON; take one before risky changes. Durable Object SQLite also offers point-in-time recovery over the last 30 days (`getBookmarkForTime` / `onNextSessionRestoreBookmark`), but Cloudflare's documentation does not state whether it is available on the Free plan — verify during M4 before relying on it.
+- **Code:** `npx wrangler rollback`; additive migrations keep older code working.
+- **Documents:** restore points inside each document (F9).
+- **Everything:** `/api/export` backup. Durable Object SQLite point-in-time recovery (30 days) may exist on the Free plan — verify in M8 before relying on it.
 
 ---
 
@@ -467,64 +468,72 @@ Push the repo to a private GitHub repository and connect it with **Workers Build
 
 ### 9.1 Plan
 
-Colo runs on the **Workers Free plan** with no payment method attached: **$0/month, and no way to be charged.** Free limits are daily and reset at 00:00 UTC. When one is exceeded, further operations of that type fail with errors until the reset — the app goes down, it does not run up a bill.
+Workers Free plan, no payment method: **$0/month with no way to be charged.** Limits reset daily at 00:00 UTC; exceeding one makes that kind of operation fail until the reset.
 
-The only ways money could ever be involved are deliberate: upgrading to Workers Paid (a $5/month minimum) or registering a custom domain (D4).
+### 9.2 Free allowances vs. a heavy day
 
-### 9.2 Free allowances vs. expected use
+Assumptions: both people actively type for 3 hours each (about 3 edits per second while typing), and 4 tabs stay open for 12 hours. Measured in the spike: **one WebSocket message per edit** and **one row written per save**. Cursor updates are assumed to add one awareness message per edit.
 
-| Resource | Free allowance | Heavy day for two people |
-|---|---|---|
-| Static asset requests | Unlimited, free | Any number |
-| Worker requests | 100,000/day; 10 ms CPU each | A few hundred (auth calls, `/api/me`, WebSocket upgrades) |
-| Durable Object requests | 100,000/day; incoming WebSocket messages count 20:1 | ~5,000 autosaves + ~6,000 heartbeats ≈ 600 billed requests |
-| Durable Object duration | 13,000 GB-s/day; hibernated objects are not billed | Under 10,800 GB-s even if the object never hibernated all day |
-| SQLite rows read | 5,000,000/day | Tens of thousands at most |
-| SQLite rows written | 100,000/day (index rows count) | ~10,000–15,000 |
-| SQLite storage | 5 GB total; 1 GB per object | A few MB |
-| Workers Logs | 200,000 events/day; 3-day retention | A few thousand |
-| Workers Builds (M4) | 3,000 build minutes/month | About a minute per deploy |
+| Resource | Free allowance | Heavy day | Share |
+|---|---|---|---|
+| Static asset requests | Unlimited | Any | — |
+| Worker requests | 100,000/day; 10 ms CPU | ~1,000–2,000 (page loads, auth, images, socket upgrades) | ~2% |
+| Durable Object requests | 100,000/day; incoming WebSocket messages count 20:1; outgoing are free | ~64,800 edits + ~64,800 cursor updates + ~11,500 awareness renewals ≈ 141,000 messages → **~7,100**; plus ~1,000 HTTP/RPC calls | ~8% |
+| Durable Object duration | 13,000 GB-s/day; hibernation-eligible idle objects are not billed | Objects active ~6 h in total at 128 MB ≈ **2,800 GB-s** | ~22% |
+| SQLite rows written | 100,000/day; deletes and `setAlarm()` count | Saves every 2–10 s while editing ≈ 2,200–10,800; auto restore points, metadata pushes, sessions ≈ 1,500 → **≤ 12,500** | ≤ 13% |
+| SQLite rows read | 5,000,000/day | State reloads after hibernation (~2 rows each), lists, auth → **< 100,000** | < 2% |
+| SQLite storage | 5 GB account; 10 GB per object | Text documents: MBs. Images ≤ 1 MB each. Restore points capped at 50 per document | Low |
+| Workers Logs | 200,000 events/day | A few thousand (WebSocket messages are not request logs) | Low |
 
-The tightest limit is rows written: it would take on the order of 30,000+ autosaves in one day — many hours of continuous typing by both people — to reach it.
+**The one real risk is duration.** If hibernation does not work as expected (for example, a timer keeps objects awake), four documents left open all day would use about 44,000 GB-s — over three times the allowance. That is why hibernation is verified on the deployed Worker in M2 before anything else is built on it, and why hidden tabs disconnect.
 
-### 9.3 Guardrails
+### 9.3 Safeguards (required)
 
-1. **Debounce autosave** at 800 ms minimum on the client.
-2. **Per-socket rate cap** of 20 messages per 10 seconds on the server (§4.3), so a runaway client cannot exhaust the daily allowances.
-3. **Hibernation-friendly Durable Object:** no in-memory timers; heartbeats answered by `setWebSocketAutoResponse()`.
-4. **Size caps** on note bodies and titles.
-5. **Check the Workers and Durable Objects metrics** in the dashboard monthly. If logs approach 200,000 events/day, lower `head_sampling_rate`.
+1. **Hibernating sockets:** `static options = { hibernate: true }` on the Document object; no timers besides the save debounce; awareness intervals disabled server-side (as `y-partyserver` already does).
+2. **Debounced whole-state saves:** 2 s after the last edit, at most 10 s apart; one row per save for documents under 1.9 MB.
+3. **Hidden-tab disconnect:** 5 minutes after a tab becomes hidden; reconnect when visible.
+4. **Per-connection caps:** 1 MB messages, 60 messages per 10 s sustained, 25 MB document state (§4.3).
+5. **Throttled metadata:** at most one Workspace update per document per minute.
+6. **Bounded restore points:** automatic at most every 30 minutes of activity; keep the newest 50 per document.
+7. **Images:** compressed in the browser, 1 MB maximum, served with long private caching.
+8. **Monitoring:** check Workers and Durable Objects metrics weekly during M2–M4 and monthly afterwards; investigate anything above 50% of a daily limit. Optional client-side cursor throttling if awareness traffic turns out higher than estimated.
 
 ---
 
 ## 10. Security posture
 
-- **Sign-in:** invite-only passkeys — no passwords to steal, phish or stuff. Invite tokens are single use, expire after 24 hours, and are stored only as hashes. The admin secret is removed once both users are enrolled.
-- **Sessions:** random 256-bit cookie values stored as hashes, `__Host-` prefixed, `HttpOnly`, `Secure`, `SameSite=Strict`, revocable, and enforced on WebSocket upgrades as well as HTTP calls. `Origin` is checked on every state-changing request and on the upgrade.
-- **Surface:** the SPA shell on `workers.dev` is public but contains no data; every note operation requires a session. Preview URLs are disabled.
-- **Browser:** strict CSP, `frame-ancestors 'none'`, and sanitised Markdown rendering (`DOMPurify`), so note content cannot inject script.
-- **Data:** stored encrypted at rest by Cloudflare inside one Durable Object; backups via `/api/export` (and point-in-time recovery if confirmed on the Free plan).
+- **Sign-in and sessions:** as in v3 — invite-only passkeys, hashed revocable sessions, `SameSite=Strict`, `Origin` checks on state changes and upgrades, admin secret removed after enrolment.
+- **Document access:** every document route is authorised by Workspace; Durable Objects are only reachable through the Worker; the Worker controls the identity header.
+- **Revocation:** logout and member disabling close document sockets across all Document objects.
+- **Browser:** CSP with `script-src 'self'` and `frame-ancestors 'none'`; `style-src` allows inline styles (§6.3). Pasted and imported HTML is parsed through the editor schema, which drops unknown elements and attributes. Header/footer text is escaped. SVG images are rejected.
+- **Abuse limits:** message, rate and document size caps per connection.
+- **Data:** encrypted at rest by Cloudflare; restore points per document; `/api/export` backups.
 
 **Residual risks:**
 
-- **Authentication code is ours.** Mitigated by using SimpleWebAuthn for the cryptography, tests for invites, sessions and revocation, and a focused review in M1.
-- **A leaked `ADMIN_TOKEN` would let someone invite themselves.** Mitigated by deleting the secret after enrollment, and by the members list and presence showing any unexpected member.
-- **An unlocked device with a synced passkey grants access.** Mitigated by requiring user verification (biometric or device PIN) on every sign-in.
+- **Authentication code is ours** (v3). Mitigated by SimpleWebAuthn, tests and a focused review in M1.
+- **Members are fully trusted.** A member (or a buggy client) can alter any document, comment authorship or cursor names. Mitigated by restore points and the small, known membership.
+- **Server cannot validate document structure** cheaply; a corrupt update affects everyone. Mitigated by restore points and the `pre-restore` safety copy.
+- **Inline styles are allowed.** CSS injection is limited because document content never becomes raw HTML outside the editor schema.
+- **Single-maintainer pagination packages.** Pin versions, review updates, and vendor if needed.
 
 ---
 
 ## 11. Build plan
 
-| Milestone | Deliverable | Rough effort |
-|---|---|---|
-| **M0 — Skeleton** | Vite + React + `@cloudflare/vite-plugin`; Worker router; empty Workspace Durable Object answering `/api/health`; `wrangler.jsonc`, `_headers`; deployed to `workers.dev` | Half a day |
-| **M1 — Passkey auth** | SimpleWebAuthn-in-workerd spike; auth tables and migrations; invite, register, login, logout; `scripts/invite.ts`; sign-in and invite screens; both users enrolled | 1–1.5 days |
-| **M2 — Notes** | Notes table; WebSocket connection with `snapshot`, `get`, `create`, `update`, `delete`; list and editor with autosave; conflict banner | 1 day |
-| **M3 — Real time** | `changed` broadcast; presence; heartbeat auto-response; reconnect and resync; per-socket rate cap; "last edited by" | 1 day |
-| **M4 — Hardening** | CSP and header check; `/api/export`; confirm Durable Object PITR on Free; session list and passkey removal; private GitHub repo + Workers Builds | Half a day |
-| **M5 — Tier B (optional)** | Yjs documents inside the Durable Object; CodeMirror 6 + `y-codemirror.next`; batched updates | 2–3 days, only if M3 proves insufficient |
+| Milestone | Deliverable | Acceptance checks | Effort |
+|---|---|---|---|
+| **M0 — Skeleton** ✅ | Vite + React + shadcn; Worker router; Workspace object answering `/api/health`; deployed | Done 15 Sep 2026 (commit `bd7f987`) | — |
+| **M1 — Passkey auth** | SimpleWebAuthn-in-workerd spike; auth tables; invite, register, login, logout; `scripts/invite.ts`; sign-in and invite screens | Both users enrolled on the deployed app; tests for invites, sessions, revocation | 1–1.5 days |
+| **M2 — Collaboration core** | `documents` table and list API; Document object on `y-partyserver` with hibernation, chunked saves, caps; Worker auth handoff and revocation; minimal Tiptap editor with collaboration and cursors; document list, create, rename, delete; hidden-tab disconnect | **Go/no-go gate on the deployed Worker:** two browsers co-edit; after 1 hour with tabs open but idle, dashboard duration stays near zero; rows written match §9.2; edits survive a deploy mid-typing | 3–4 days |
+| **M3 — Document UI** | Docs-style shell (top bar, menus, toolbar), formatting set (F5), outline, fonts, save status, mobile layout, CSP change | Every toolbar action works in two collaborating browsers; no CSP violations; usable on a phone | 3–4 days |
+| **M4 — Real pages** | Pagination with A4/Letter, margins, headers/footers, page numbers including "Page X of Y", table splitting, page breaks, page setup dialog, print stylesheet | 50-page document with tables stays responsive (< 16 ms layout per keystroke on a laptop); printed PDF matches on-screen pages; remote edits reflow correctly | 2–3 days |
+| **M5 — Comments** | Comment mark, thread storage, margin cards, replies, resolve/reopen, detached threads | Comments sync live, survive edits to anchored text, restore with restore points | 2–3 days |
+| **M6 — Images and restore points** | Upload, paste, resize and alignment of images; automatic and named restore points; restore with `pre-restore` copy | Image-heavy document stays under limits; restoring a point updates both browsers | 2 days |
+| **M7 — DOCX** | Import (content, tables, images, page size, margins) and export (content, tables, images, page settings, headers/footers, page numbers, comments) | Round-trip test documents open correctly in Word and LibreOffice; known losses documented | 2–3 days |
+| **M8 — Hardening** | `/api/export`; PITR check; security review; Workers Builds CI; metrics review; mobile pass | Backup restores to a local instance; CI deploys from `main` | 2 days |
 
-Ship M0–M4 first and use the app before deciding on M5. The decision gate is concrete: if the two of you repeatedly hit "someone else changed this note" conflicts in real use, Tier B is justified; if not, it is complexity for its own sake.
+**Total:** about 17–24 working days after M0.
 
 ---
 
@@ -532,15 +541,16 @@ Ship M0–M4 first and use the app before deciding on M5. The decision gate is c
 
 | # | Decision | Default if undecided |
 |---|---|---|
-| D1 | Tier B live co-editing — build it? | No; revisit after two weeks of real M3 use |
-| D2 | Markdown rendering in the editor | Yes, with sanitised output |
-| D3 | Durable Object location | `locationHint: "apac"` on first creation; the object stays where it is created |
-| D4 | Custom domain | Deferred. Costs the registry price via Cloudflare Registrar (no markup). Would also allow hostname-based Cloudflare Access as an alternative login ([ADR 0002](decisions/0002-passkey-auth-on-workers-dev.md)); requires re-enrolling passkeys |
-| D5 | Note history / revisions | Deferred; a `note_revisions` table in the same object is cheap to add |
-| D6 | Automated off-site backups | Deferred; manual `/api/export` in M4, plus PITR if available on Free |
-| D7 | Per-note sharing or roles | Deferred; would add a `note_members` table and a per-note check |
-| D8 | Trash / restore UI | Deferred; soft-deleted rows stay in the table and appear in `/api/export` |
-| D9 | Staging environment | Deferred; a second Worker (`colo-staging`) would get its own Durable Object and data automatically |
+| D1 | Suggesting mode (track changes) | Deferred. Evaluate `@handlewithcare/prosemirror-suggest-changes` (MIT) with Yjs after M7 |
+| D2 | Full-text search across documents | Deferred. Would store extracted plain text per document in Workspace |
+| D3 | Durable Object location | `locationHint: "apac"` on first creation of every object |
+| D4 | Custom domain | Deferred; would cost a registry fee and require re-enrolling passkeys |
+| D5 | Offline editing | Deferred. `y-indexeddb` would add offline edits and faster loads; must be cleared on sign-out |
+| D6 | Automated off-site backups | Deferred; manual `/api/export`, plus PITR if available on Free |
+| D7 | Per-document sharing or roles | Deferred; all members edit all documents |
+| D8 | Trash / restore deleted documents UI | Deferred; soft-deleted rows remain and appear in `/api/export` |
+| D9 | Staging environment | Deferred; a second Worker would get its own objects and data |
+| D10 | Word-faithful layout | Deferred. If M4 cannot meet its checks, re-evaluate SuperDoc (AGPL-3.0, ~2.7 MB gzip engine, telemetry must be disabled) per ADR 0003 |
 
 ---
 
@@ -548,15 +558,15 @@ Ship M0–M4 first and use the app before deciding on M5. The decision gate is c
 
 Figures confirmed against Cloudflare documentation in September 2026.
 
-**Workers.** Free: 100,000 requests/day, 10 ms CPU per invocation; exceeding a daily limit makes further operations fail with errors rather than incur charges. Paid: $5/month minimum including 10 million requests and 30 million CPU-ms per month. Static asset requests are free and unlimited on both plans. `_headers` rules do not apply to responses generated by Worker code. Preview URLs are not generated for Workers that implement a Durable Object.
+**Workers.** Free: 100,000 requests/day, 10 ms CPU per invocation; exceeding a daily limit makes further operations fail with errors rather than incur charges. Static asset requests are free and unlimited. `_headers` rules do not apply to responses generated by Worker code. Preview URLs are not generated for Workers that implement a Durable Object.
 
-**Durable Objects.** Free plan supports only SQLite-backed objects: 100,000 requests/day, 13,000 GB-s duration/day, 5 million rows read/day, 100,000 rows written/day, 5 GB storage total, 1 GB per object, 100 classes per account. Limits reset at 00:00 UTC. Incoming WebSocket messages are billed at a 20:1 ratio. Objects idle and eligible for hibernation are not billed for duration; `setWebSocketAutoResponse()` replies without waking the object or incurring duration charges. Socket attachments are limited to 16 KiB; received WebSocket messages to 32 MiB; CPU per request defaults to 30 seconds. Each index row updated counts as an additional row written. SQLite point-in-time recovery covers the last 30 days (Free-plan availability not stated).
+**Durable Objects.** Free plan supports only SQLite-backed objects: 100,000 requests/day, 13,000 GB-s duration/day, 5 million rows read/day, 100,000 rows written/day, 5 GB storage for the account, 10 GB per object, 100 classes per account. Limits reset at 00:00 UTC. Incoming WebSocket messages are billed at 20:1; outgoing messages are free. Objects idle and eligible for hibernation are not billed for duration, even before they are hibernated. Alarms do not count as requests, but each `setAlarm()` counts as a row written; deletes count as rows written; index rows count as additional rows written. Maximum string, BLOB or row size 2 MB; SQL statement 100 KB; 100 columns per table; 100 bound parameters per query. Received WebSocket messages up to 32 MiB; socket attachments up to 16 KiB; CPU per request 30 seconds by default. `PRAGMA user_version` is not authorised (found in M0). SQLite point-in-time recovery covers 30 days (Free-plan availability not stated).
 
-**Workers Logs.** Free: 200,000 log events/day with 3-day retention. Paid: 20 million events/month included, 7-day retention.
+**R2.** Free tier of 10 GB-month storage, 1 million Class A and 10 million Class B operations per month with free egress, but enabling R2 requires adding a payment method — not used by Colo.
+
+**Workers Logs.** Free: 200,000 log events/day, 3-day retention.
 
 **Workers Builds.** Free: 3,000 build minutes/month, one concurrent build, 20-minute timeout.
-
-**Cloudflare Access (for ADR 0002).** Worker-level Access policies do not currently support WebSocket connections; `ctx.access` is not passed to Workers that serve Static Assets. Zero Trust's free plan covers up to 50 users.
 
 ---
 
@@ -566,13 +576,17 @@ Figures confirmed against Cloudflare documentation in September 2026.
 - [Durable Objects pricing](https://developers.cloudflare.com/durable-objects/platform/pricing/)
 - [Durable Objects limits](https://developers.cloudflare.com/durable-objects/platform/limits/)
 - [Durable Objects SQLite storage API](https://developers.cloudflare.com/durable-objects/api/sqlite-storage-api/)
-- [Durable Objects state API (WebSockets, auto-response)](https://developers.cloudflare.com/durable-objects/api/state/)
 - [Durable Objects WebSocket best practices](https://developers.cloudflare.com/durable-objects/best-practices/websockets/)
 - [Durable Objects migrations and exports](https://developers.cloudflare.com/durable-objects/reference/durable-objects-migrations/)
 - [Workers Static Assets headers](https://developers.cloudflare.com/workers/static-assets/headers/)
-- [Workers preview URLs](https://developers.cloudflare.com/workers/configuration/previews/)
-- [Workers Logs](https://developers.cloudflare.com/workers/observability/logs/workers-logs/)
-- [Workers Builds limits and pricing](https://developers.cloudflare.com/workers/ci-cd/builds/limits-and-pricing/)
-- [Cloudflare Access for Workers](https://developers.cloudflare.com/workers/configuration/cloudflare-access/)
-- [Cloudflare Registrar](https://www.cloudflare.com/products/registrar/)
+- [Workers Static Assets SPA routing](https://developers.cloudflare.com/workers/static-assets/routing/single-page-application/)
+- [R2 pricing](https://developers.cloudflare.com/r2/pricing/) and [community report on the R2 payment-method requirement](https://community.cloudflare.com/t/if-i-want-to-use-cloudflare-r2-i-have-to-link-a-payment-method-i-suggest-not-doin/887578)
+- [PartyKit / y-partyserver](https://github.com/cloudflare/partykit/tree/main/packages/y-partyserver)
+- [Tiptap pricing](https://tiptap.dev/pricing) and [Tiptap open-sourcing formerly Pro extensions](https://tiptap.dev/blog/release-notes/were-open-sourcing-more-of-tiptap)
+- [tiptap-pagination-plus](https://github.com/RomikMakavana/tiptap-pagination-plus)
+- [CKEditor 5 licensing](https://ckeditor.com/docs/ckeditor5/latest/getting-started/licensing/license-and-legal.html)
+- [Plate Yjs](https://platejs.org/docs/yjs), [Plate comments](https://platejs.org/docs/comment), [Plate pagination discussion](https://github.com/udecode/plate/discussions/4380)
+- [BlockNote comments](https://www.blocknotejs.org/docs/features/collaboration/comments) and [DOCX export licensing](https://www.blocknotejs.org/docs/features/export/docx)
+- [SuperDoc](https://github.com/superdoc-dev/superdoc)
+- [eigenpal docx-js-editor](https://github.com/eigenpal/docx-js-editor)
 - [SimpleWebAuthn server](https://simplewebauthn.dev/docs/packages/server)

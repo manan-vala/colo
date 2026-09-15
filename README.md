@@ -1,12 +1,13 @@
 # Colo
 
-A small collaborative notes app for two people: shared notes, edited in the browser, with saved changes showing up on the other person's screen in about a second.
+A private document editor for two people, in the style of Google Docs: simultaneous typing with live cursors, rich formatting, real pages with headers and footers, comments, and DOCX import/export.
 
-Runs entirely on the **Cloudflare Workers Free plan** at $0/month:
+Runs entirely on the **Cloudflare Workers Free plan** at $0/month, using only open-source libraries:
 
-- **Workers Static Assets** serve the React SPA.
-- A thin **Worker** forwards `/api/*` to one **Durable Object**.
-- The Durable Object stores everything in its embedded **SQLite** database and pushes live updates over **WebSockets**.
+- **Workers Static Assets** serve the React SPA (Tiptap editor, shadcn/ui).
+- A thin **Worker** routes `/api/*` and authorises document connections.
+- A **Workspace Durable Object** holds members, passkeys, sessions and the document index.
+- One **Document Durable Object** per document syncs edits with **Yjs** over hibernating **WebSockets** and stores the document in its embedded **SQLite** database.
 - Sign-in is invite-only with **passkeys**.
 
 ## Docs
@@ -14,6 +15,7 @@ Runs entirely on the **Cloudflare Workers Free plan** at $0/month:
 - [docs/colo-plan.md](docs/colo-plan.md) — architecture, data model, API, deployment, cost model and build plan
 - [ADR 0001 — Move from AWS to Cloudflare](docs/decisions/0001-move-from-aws-to-cloudflare.md)
 - [ADR 0002 — Passkey sign-in on workers.dev](docs/decisions/0002-passkey-auth-on-workers-dev.md)
+- [ADR 0003 — Collaborative document engine: Tiptap + Yjs on per-document Durable Objects](docs/decisions/0003-collaborative-document-engine.md)
 
 ## Development
 
@@ -55,4 +57,6 @@ colo/
 
 ## Status
 
-M0 (skeleton) is deployed at <https://colo.manan-vala.workers.dev>: the SPA, the Worker router and an empty SQLite-backed Workspace Durable Object (running in SIN) answering `GET /api/health`. Next: M1, passkey auth.
+M0 (skeleton) is deployed at <https://colo.manan-vala.workers.dev>: the SPA, the Worker router and an empty SQLite-backed Workspace Durable Object (running in SIN) answering `GET /api/health`.
+
+Plan v4 (15 Sep 2026) turns Colo into a collaborative document editor; see §11 of the plan for milestones M1–M8. Next: M1, passkey auth.
