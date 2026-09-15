@@ -2,6 +2,8 @@ import { FileText, LoaderCircle, LogOut, Pencil, Plus, Trash2 } from "lucide-rea
 import { useCallback, useEffect, useState } from "react";
 import { LIMITS, type DocumentSummary, type ListDocumentsResponse, type Member } from "../../shared/protocol";
 import { Button } from "@/components/ui/button";
+import logo from "../assets/logo.svg";
+import documentsBanner from "../assets/documents-banner.png";
 import { ApiRequestError, api } from "../api";
 import { timeAgo } from "../lib/time";
 import { navigate } from "../router";
@@ -48,7 +50,10 @@ export function Home({ member, onSignOut, onSessionEnded }: { member: Member; on
   return (
     <div className="min-h-svh bg-muted/40">
       <header className="flex items-center justify-between gap-3 border-b bg-background px-4 py-3">
-        <span className="text-lg font-semibold tracking-tight">Colo</span>
+        <span className="flex items-center gap-2 text-lg font-semibold tracking-tight">
+          <img src={logo} alt="" className="size-5" />
+          Colo
+        </span>
         <div className="flex items-center gap-3">
           <span className="hidden text-sm text-muted-foreground sm:inline">{member.displayName}</span>
           <Button variant="outline" size="sm" onClick={onSignOut}>
@@ -57,6 +62,10 @@ export function Home({ member, onSignOut, onSessionEnded }: { member: Member; on
           </Button>
         </div>
       </header>
+
+      <div className="h-40 w-full overflow-hidden sm:h-48">
+        <img src={documentsBanner} alt="" className="size-full object-cover" />
+      </div>
 
       <main className="mx-auto grid max-w-3xl gap-4 px-4 py-8">
         <div className="flex flex-wrap items-center gap-3">

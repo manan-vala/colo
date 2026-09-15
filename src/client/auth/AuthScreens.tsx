@@ -4,6 +4,7 @@ import { useState, type ReactNode } from "react";
 import type { Member } from "../../shared/protocol";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import logo from "../assets/logo.svg";
 import { describeAuthError, registerWithInvite, signInWithPasskey } from "../auth";
 
 function AuthCard({ title, description, children }: { title: string; description: string; children: ReactNode }) {
@@ -11,7 +12,10 @@ function AuthCard({ title, description, children }: { title: string; description
     <main className="flex min-h-svh items-center justify-center bg-muted/40 px-4 py-10">
       <Card className="w-full max-w-sm">
         <CardHeader>
-          <p className="text-2xl font-semibold tracking-tight">Colo</p>
+          <p className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
+            <img src={logo} alt="" className="size-6" />
+            Colo
+          </p>
           <CardTitle>{title}</CardTitle>
           <CardDescription>{description}</CardDescription>
         </CardHeader>
