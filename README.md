@@ -70,4 +70,4 @@ colo/
 
 M0 (skeleton) is deployed at <https://colo.manan-vala.workers.dev>: the SPA, the Worker router and an empty SQLite-backed Workspace Durable Object (running in SIN) answering `GET /api/health`.
 
-Plan v4 turns Colo into a collaborative document editor (§11 of the plan). **M1 (passkey sign-in) and M2 (collaborative documents) are built and tested locally but not yet deployed**; the production deploy, admin secret, enrolment and the deployed M2 gate are the next steps. After that: M3, the Docs-style UI.
+Plan v4 turns Colo into a collaborative document editor (§11 of the plan). **M1 (passkey sign-in) and M2 (collaborative documents) are deployed**, and M2 passed its go/no-go gate on Cloudflare (hibernation, reconnect through a redeploy). Next: enrol both users, then M3, the Docs-style UI.
