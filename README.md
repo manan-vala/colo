@@ -29,7 +29,18 @@ npm run build        # type-check, then build client and Worker into dist/
 npm run preview      # serve the production build locally (applies public/_headers)
 npm run deploy       # build, then wrangler deploy
 npm run cf-typegen   # regenerate worker-configuration.d.ts after editing wrangler.jsonc
+npm run invite -- --email <email> --name "<name>" [--local]   # one-time invite link
 ```
+
+Browser smoke tests drive the local Chrome with virtual passkeys (start `npm run dev` or `npx vite preview --port 5173` first):
+
+```bash
+npm run e2e:auth     # invite → passkey → sign out → sign in
+npm run e2e:collab   # two people co-edit a document
+COLO_URL=https://… npm run e2e:gate   # M2 gate on a deployed Worker (hibernation, deploy mid-typing)
+```
+
+Local secrets live in `.dev.vars` (git-ignored): `RP_ID="localhost"`, `ORIGIN="http://localhost:5173"`, `ADMIN_TOKEN="…"`.
 
 To add a package, use `npx npm@latest install <pkg>`: npm 11.5 crashes resolving Vite 8's optional peer dependencies. `npm ci` is unaffected.
 
@@ -59,4 +70,4 @@ colo/
 
 M0 (skeleton) is deployed at <https://colo.manan-vala.workers.dev>: the SPA, the Worker router and an empty SQLite-backed Workspace Durable Object (running in SIN) answering `GET /api/health`.
 
-Plan v4 (15 Sep 2026) turns Colo into a collaborative document editor; see §11 of the plan for milestones M1–M8. Next: M1, passkey auth.
+Plan v4 turns Colo into a collaborative document editor (§11 of the plan). **M1 (passkey sign-in) and M2 (collaborative documents) are built and tested locally but not yet deployed**; the production deploy, admin secret, enrolment and the deployed M2 gate are the next steps. After that: M3, the Docs-style UI.

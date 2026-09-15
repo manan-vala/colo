@@ -1,6 +1,6 @@
 # Colo — Build & Deployment Plan
 
-**Status:** Draft v4
+**Status:** Draft v4.1
 **Date:** 15 September 2026
 **Owner:** SWC
 **Platform:** Cloudflare Workers (Free plan)
@@ -18,6 +18,7 @@
 | v3 | 14 Sep 2026 | **Moved to Cloudflare.** One Durable Object holds all data (SQLite) and the WebSocket hub; invite-only passkey sign-in on `*.workers.dev`. Rationale: [ADR 0001](decisions/0001-move-from-aws-to-cloudflare.md) and [ADR 0002](decisions/0002-passkey-auth-on-workers-dev.md) |
 | v3.1 | 15 Sep 2026 | Corrections from building M0: Tailwind CSS v4 + shadcn/ui; `schema_version` table because Durable Object SQLite rejects `PRAGMA user_version`; `@cloudflare/vitest-plugin`; `wrangler.jsonc` keys confirmed against Wrangler 4.131. M0 deployed (commit `bd7f987`) |
 | v4 | 15 Sep 2026 | **From shared notes to a collaborative document editor in the style of Google Docs.** Tiptap 3 + Yjs; one Document Durable Object per document on `y-partyserver`; real pages, comments, images, restore points, DOCX import/export; new cost model and milestones. Rationale and research: [ADR 0003](decisions/0003-collaborative-document-engine.md) |
+| v4.1 | 15 Sep 2026 | **M1 and M2 built** (commits `1ab20c2`, `4d696f1`); deploy pending. Corrections: message rate cap is a token bucket of 30/s with bursts of 600 (60 per 10 s cut off fast typists); `doc_meta` deferred — save metadata stays in memory; title changes reach the document list immediately while other edits stay throttled; M2 keeps the strict CSP because nothing in it injects styles (relaxation moves to M3); measured 2 WebSocket messages per keystroke (edit + cursor), as §9.2 assumed |
 
 Earlier designs remain readable in git history.
 
@@ -121,7 +122,7 @@ Everything is served from one hostname, `colo.manan-vala.workers.dev`, so there 
 3. Worker forwards the upgrade to `DOCUMENT.getByName(docId, { locationHint: "apac" })`, replacing any client-supplied `x-colo-member` header with the authorised identity.
 4. The Document object accepts the socket as hibernatable, stores `{memberId, sessionHash, sessionExpiresAt}` in the connection state, loads the Yjs state from SQLite if it is not in memory, and runs the Yjs sync handshake. Cursors and names flow through Yjs awareness.
 
-**Editing.** Each local change is sent as a Yjs update and relayed to the other sockets. The object saves the merged state 2 s after edits pause, and at least every 10 s during continuous typing. At most once a minute it pushes `title`, `updatedAt` and `updatedBy` to Workspace for the document list.
+**Editing.** Each local change is sent as a Yjs update and relayed to the other sockets. The object saves the merged state 2 s after edits pause, and at least every 10 s during continuous typing. It pushes `title`, `updatedAt` and `updatedBy` to Workspace for the document list — immediately when the title changed, otherwise at most once a minute.
 
 **Disconnect, deploy, crash.** The provider reconnects with backoff and re-syncs; any edits the server lost are re-sent from the client. Deploys restart objects, so this path runs routinely.
 
@@ -175,14 +176,6 @@ CREATE TABLE doc_state (                         -- Y.encodeStateAsUpdate(doc), 
   data          BLOB NOT NULL                    -- ≤ 1.9 MB (row limit is 2 MB)
 );
 
-CREATE TABLE doc_meta (
-  id            INTEGER PRIMARY KEY CHECK (id = 1),
-  doc_id        TEXT NOT NULL,
-  state_bytes   INTEGER NOT NULL,
-  saved_at      TEXT NOT NULL,
-  last_pushed_at TEXT                            -- last metadata push to Workspace
-);
-
 CREATE TABLE restore_points (
   id            TEXT PRIMARY KEY,
   kind          TEXT NOT NULL CHECK (kind IN ('auto', 'named', 'pre-restore', 'import')),
@@ -215,7 +208,7 @@ CREATE TABLE image_chunks (
 ) WITHOUT ROWID;
 ```
 
-A save writes the state chunks with `INSERT OR REPLACE` and deletes chunks beyond the new count, all in one `transactionSync()`. `WITHOUT ROWID` tables keep their primary key as the table itself, so chunk writes add no index rows.
+`doc_state` ships in M2; `restore_points` and `images` arrive in M6. A save upserts the state chunks and deletes chunks beyond the new count, all in one `transactionSync()`. Save time and the last metadata push are kept in memory rather than in a `doc_meta` row, so a save costs exactly one row for documents under 1.9 MB. `WITHOUT ROWID` tables keep their primary key as the table itself, so chunk writes add no index rows.
 
 ### 3.3 Inside the Yjs document
 
@@ -277,7 +270,7 @@ The document socket speaks the standard Yjs protocols, as implemented by `y-part
 - **Session checks.** Checked by Workspace on connect; afterwards the connection state carries `sessionExpiresAt`, and the object closes the socket with code `4001` on the first message after expiry. Logout and disabling a member close sockets immediately (§2.3).
 - **Caps (per connection, enforced in the Document object before Yjs processing).**
   - Message size ≤ 1 MB (images use HTTP, not Yjs).
-  - ≤ 60 messages per 10 seconds sustained, bursts allowed; counters live in the connection state so they survive hibernation.
+  - A token bucket of 30 messages per second with bursts of 600; the counter lives in the socket attachment so it survives hibernation. Exceeding it closes the socket (code 4008) so the client reconnects and re-syncs instead of silently losing an edit.
   - Document state ≤ 25 MB; beyond that the document becomes read-only with a `DOCUMENT_TOO_LARGE` notice.
 - **Image validation.** The object checks the file signature matches the declared type and rejects SVG (script risk).
 
@@ -336,7 +329,7 @@ Added in v4: document socket authorisation through Workspace, the `document_sess
   Cache-Control: public, max-age=31536000, immutable
 ```
 
-- **`style-src 'unsafe-inline'` is required** because `tiptap-pagination-plus` and Radix insert `<style>` elements (verified in the spike). `script-src` stays `'self'`, which also blocks inline event handlers. Tiptap's own injected CSS is disabled (`injectCSS: false`) and shipped as a stylesheet. The change lands in M3, when the editor arrives; M0's policy stays strict until then.
+- **`style-src 'unsafe-inline'` is required** because `tiptap-pagination-plus` and Radix insert `<style>` elements (verified in the spike). `script-src` stays `'self'`, which also blocks inline event handlers. Tiptap's own injected CSS is disabled (`injectCSS: false`) and shipped as a stylesheet. The change lands in M3, when Radix menus and pagination arrive; M2's editor works under the strict policy (verified under `vite preview`).
 - **Header/footer text is plain text**, escaped before it reaches pagination-plus (which renders HTML), so a document cannot inject markup through page settings.
 - `_headers` does not apply to Worker responses, so the Worker adds the same headers to `/api` responses (except `101` upgrades), plus `Cache-Control: no-store` unless the object sets one.
 
@@ -381,6 +374,8 @@ colo/
       doc-schema.ts         # Yjs document structure and settings types
   scripts/
     invite.ts
+  e2e/                      # browser smoke tests (puppeteer-core + Chrome virtual passkeys)
+    auth.ts, collab.ts, gate.ts
   test/
   docs/
     colo-plan.md
@@ -442,9 +437,14 @@ Done for M0 on 15 September 2026. From M1 onwards:
 npm run deploy
 curl https://colo.manan-vala.workers.dev/api/health
 
-# Admin secret, invites, then remove the secret (Git Bash on Windows provides openssl)
-openssl rand -base64 32 | npx wrangler secret put ADMIN_TOKEN
-COLO_ADMIN_TOKEN=<token> npm run invite -- --email <email> --name "<name>"
+# Admin secret: keep a copy outside the repo (the invite script reads ~/.colo/admin-token)
+mkdir -p ~/.colo && openssl rand -base64 32 | tr -d '
+' > ~/.colo/admin-token
+npx wrangler secret put ADMIN_TOKEN < ~/.colo/admin-token
+
+npm run invite -- --email <email> --name "<name>"   # prints a one-time link valid for 24 h
+
+# After both passkeys are enrolled
 npx wrangler secret delete ADMIN_TOKEN
 ```
 
@@ -492,8 +492,8 @@ Assumptions: both people actively type for 3 hours each (about 3 edits per secon
 1. **Hibernating sockets:** `static options = { hibernate: true }` on the Document object; no timers besides the save debounce; awareness intervals disabled server-side (as `y-partyserver` already does).
 2. **Debounced whole-state saves:** 2 s after the last edit, at most 10 s apart; one row per save for documents under 1.9 MB.
 3. **Hidden-tab disconnect:** 5 minutes after a tab becomes hidden; reconnect when visible.
-4. **Per-connection caps:** 1 MB messages, 60 messages per 10 s sustained, 25 MB document state (§4.3).
-5. **Throttled metadata:** at most one Workspace update per document per minute.
+4. **Per-connection caps:** 1 MB messages, 30 messages/s sustained with bursts of 600, 25 MB document state (§4.3).
+5. **Throttled metadata:** at most one Workspace update per document per minute for ordinary edits (a pending update is flushed by an alarm); title changes are sent immediately.
 6. **Bounded restore points:** automatic at most every 30 minutes of activity; keep the newest 50 per document.
 7. **Images:** compressed in the browser, 1 MB maximum, served with long private caching.
 8. **Monitoring:** check Workers and Durable Objects metrics weekly during M2–M4 and monthly afterwards; investigate anything above 50% of a daily limit. Optional client-side cursor throttling if awareness traffic turns out higher than estimated.
@@ -524,8 +524,8 @@ Assumptions: both people actively type for 3 hours each (about 3 edits per secon
 | Milestone | Deliverable | Acceptance checks | Effort |
 |---|---|---|---|
 | **M0 — Skeleton** ✅ | Vite + React + shadcn; Worker router; Workspace object answering `/api/health`; deployed | Done 15 Sep 2026 (commit `bd7f987`) | — |
-| **M1 — Passkey auth** | SimpleWebAuthn-in-workerd spike; auth tables; invite, register, login, logout; `scripts/invite.ts`; sign-in and invite screens | Both users enrolled on the deployed app; tests for invites, sessions, revocation | 1–1.5 days |
-| **M2 — Collaboration core** | `documents` table and list API; Document object on `y-partyserver` with hibernation, chunked saves, caps; Worker auth handoff and revocation; minimal Tiptap editor with collaboration and cursors; document list, create, rename, delete; hidden-tab disconnect | **Go/no-go gate on the deployed Worker:** two browsers co-edit; after 1 hour with tabs open but idle, dashboard duration stays near zero; rows written match §9.2; edits survive a deploy mid-typing | 3–4 days |
+| **M1 — Passkey auth** ✅ built | SimpleWebAuthn-in-workerd spike (runs without `nodejs_compat`); auth tables; invite, register, login, logout; `scripts/invite.ts`; sign-in and invite screens | Tests with a software authenticator ✅; browser test with Chrome virtual passkeys ✅; **both users enrolled on the deployed app — pending deploy** | Commit `1ab20c2` |
+| **M2 — Collaboration core** ✅ built | `documents` table and list API; Document object on `y-partyserver` with hibernation, chunked saves, caps; Worker auth handoff and revocation; minimal Tiptap editor with collaboration and cursors; document list, create, rename, delete; hidden-tab disconnect | Local: 44 workerd tests ✅, two-browser co-editing test on the production build under the strict CSP ✅. **Go/no-go gate on the deployed Worker — pending deploy** (`npm run e2e:gate`): co-edit; idle while tabs stay open and confirm wake-ups (`document-load` logs) and near-zero duration in the dashboard; edits survive a deploy mid-typing | Commit `4d696f1` |
 | **M3 — Document UI** | Docs-style shell (top bar, menus, toolbar), formatting set (F5), outline, fonts, save status, mobile layout, CSP change | Every toolbar action works in two collaborating browsers; no CSP violations; usable on a phone | 3–4 days |
 | **M4 — Real pages** | Pagination with A4/Letter, margins, headers/footers, page numbers including "Page X of Y", table splitting, page breaks, page setup dialog, print stylesheet | 50-page document with tables stays responsive (< 16 ms layout per keystroke on a laptop); printed PDF matches on-screen pages; remote edits reflow correctly | 2–3 days |
 | **M5 — Comments** | Comment mark, thread storage, margin cards, replies, resolve/reopen, detached threads | Comments sync live, survive edits to anchored text, restore with restore points | 2–3 days |

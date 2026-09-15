@@ -15,7 +15,8 @@
     "cf-typegen": "wrangler types",
     "invite": "node scripts/invite.ts",
     "e2e:auth": "node e2e/auth.ts",
-    "e2e:collab": "node e2e/collab.ts"
+    "e2e:collab": "node e2e/collab.ts",
+    "e2e:gate": "node e2e/gate.ts"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.3.0",
