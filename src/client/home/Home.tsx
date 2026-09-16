@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { LIMITS, type DocumentSummary, type ListDocumentsResponse, type Member } from "../../shared/protocol";
 import { Button } from "@/components/ui/button";
 import logo from "../assets/logo.svg";
-import documentsBanner from "../assets/documents-banner.webp";
+import { banner } from "./banner";
 import { ApiRequestError, api } from "../api";
 import { timeAgo } from "../lib/time";
 import { navigate } from "../router";
@@ -64,7 +64,7 @@ export function Home({ member, onSignOut, onSessionEnded }: { member: Member; on
       </header>
 
       <div className="h-40 w-full overflow-hidden sm:h-48">
-        <img src={documentsBanner} alt="" className="size-full object-cover" />
+        <img src={banner} alt="" className="size-full object-cover" />
       </div>
 
       <main className="mx-auto grid max-w-3xl gap-4 px-4 py-8">

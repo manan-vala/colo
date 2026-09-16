@@ -1,7 +1,7 @@
 # Colo — Build & Deployment Plan
 
-**Status:** Draft v4.3
-**Date:** 15 September 2026
+**Status:** Draft v4.5
+**Date:** 16 September 2026
 **Owner:** SWC
 **Platform:** Cloudflare Workers (Free plan)
 **Scale target:** 1–2 monthly active users (personal project)
@@ -22,6 +22,7 @@
 | v4.2 | 15 Sep 2026 | **M1 and M2 deployed; M2 gate passed** on a temporary `colo-staging` Worker (deleted afterwards): co-editing on Cloudflare; Document objects were evicted and reloaded from SQLite while both sockets stayed open, running no code in between; 238 tokens typed through a redeploy all arrived. The gate found a client bug — the editor unmounted while reconnecting and dropped keystrokes — fixed in `38ae967` |
 | v4.3 | 15 Sep 2026 | **M3 built** (commits `1f5618a`…`bea380f`): Docs-style shell and full F5 formatting set; CSP `style-src` relaxed as planned. Deviations: the outline reads headings from editor state instead of Tiptap's TableOfContents extension, so it never writes heading IDs into the shared document; paragraph styles are Normal text and Headings 1–4 (no Title/Subtitle); drag handles and UniqueID are deferred until a milestone needs them; the page canvas is Letter-sized without pagination until M4 |
 | v4.4 | 15 Sep 2026 | **M3 deployed to production.** Branding added outside the milestone plan (commits `a074fba`, `1327653`, `c1fa431`): a black wordmark SVG as the in-app logo (document list header, auth cards) and a white variant as the favicon (tab bars are usually dark chrome, so white reads better than black — it is a plain shape with no adaptive background, so it will be invisible on light-themed tab strips); a 1600×400 banner image between the navbar and the document list on the home screen, re-encoded from a 1.46 MB PNG to a ~200 KB WebP (quality 90) with no visible quality loss. No DOCX export exists yet — that is still M7 |
+| v4.5 | 16 Sep 2026 | **Home banner has four variants**, all 1600×400 WebP (quality 90, 19–200 KB each) in `src/client/assets/banners/`: the original purple mosaic plus three new sky photos (blue sky, golden hour, night sky). One is chosen at random when the app's JS module first loads and stays fixed for the rest of that load — including navigating away from and back to the document list — and a new one is picked only on an actual browser refresh, since that re-evaluates the module. No server involvement or persistence; purely a client-side cosmetic touch, so it needed no ADR |
 
 Earlier designs remain readable in git history.
 
