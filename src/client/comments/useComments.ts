@@ -43,7 +43,7 @@ export interface CommentsState {
 
 /** Stable for the life of the document screen, so cards can skip re-rendering. */
 export interface CommentsActions {
-  /** Starts a comment on the selected text; returns false when nothing is selected. */
+  /** Starts a comment on the selected text; returns false when no text is selected. */
   start: () => boolean;
   post: (body: string) => boolean;
   cancel: () => void;
@@ -164,10 +164,14 @@ export function useComments(editor: Editor, doc: Y.Doc, author: Author): { state
       start: () => {
         const { from, to, empty } = editor.state.selection;
         if (empty) return false;
+        // The anchor is a text mark: a selection without text (a selected image) cannot carry
+        // one, and its thread would be detached from the start.
+        const quote = editor.state.doc.textBetween(from, to, " ");
+        if (!quote.trim()) return false;
         const range = trackRange(editor.state, from, to);
         if (!range) return false;
         const threadId = newId();
-        setDraft({ threadId, range, quote: editor.state.doc.textBetween(from, to, " ") });
+        setDraft({ threadId, range, quote });
         setActiveId(threadId);
         setError(null);
         return true;

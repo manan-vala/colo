@@ -177,6 +177,17 @@ try {
   });
   check(centred <= 2, "Bea sees the image centred");
 
+  // A comment needs text: Ctrl+Alt+M on a selected image explains that instead of starting a
+  // thread that could never be anchored.
+  await clickImage(a, pickedIndex);
+  await a.keyboard.down("Control");
+  await a.keyboard.down("Alt");
+  await a.keyboard.press("m");
+  await a.keyboard.up("Alt");
+  await a.keyboard.up("Control");
+  await a.waitForFunction(() => document.querySelector('[role="status"]')?.textContent?.includes("Select some text"), { timeout: 5_000 });
+  check(!(await a.$('article[aria-label="New comment"]')), "commenting on a selected image asks for text instead");
+
   // Image-heavy: six more pasted images, each over 1 MB as PNG.
   await a.click(".colo-editor p");
   await pasteNoiseImages(a, Array.from({ length: 6 }, (_, i) => [1200 + i * 20, 900] as [number, number]));
