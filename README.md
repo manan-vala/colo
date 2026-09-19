@@ -32,6 +32,7 @@ npm run preview      # serve the production build locally (applies public/_heade
 npm run deploy       # build, then wrangler deploy
 npm run cf-typegen   # regenerate worker-configuration.d.ts after editing wrangler.jsonc
 npm run invite -- --email <email> --name "<name>" [--local]   # one-time invite link
+npm run restore -- --file <backup.ndjson> [--overwrite]       # restore a backup into the local instance
 ```
 
 Browser smoke tests drive the local Chrome with virtual passkeys (start `npm run dev` or `npx vite preview --port 5173` first):
@@ -46,6 +47,7 @@ npm run e2e:comments-perf   # typing with many threads (run against the producti
 npm run e2e:images   # upload, paste, resize, align; large images compressed; pages and print (M6)
 npm run e2e:restore  # named version, restore for both people with comments, restore the restore (M6)
 npm run e2e:convert  # import a Word file, download every format, open the Word export in Word (M7)
+npm run e2e:backup   # export, wreck a document, restore it with the script, image intact (M8)
 COLO_URL=https://… npm run e2e:gate   # M2 gate on a deployed Worker (hibernation, deploy mid-typing)
 ```
 
@@ -86,4 +88,6 @@ M4 added A4/Letter pages in portrait or landscape, margins, one-line headers and
 
 **M6 (images and restore points):** add images from Insert → Image, the toolbar, paste or drag and drop; they are compressed in the browser (at most 2048 px and 1 MB) and stored with the document; drag a corner to resize, use the alignment buttons to place them. File → Restore points lists automatic versions (kept before each stretch of editing) and named ones; restoring changes the document for both people, comments included, and keeps the version it replaced.
 
-**M7 (import and export) is built, not yet deployed:** Import file on the list page or File → Open file brings in Word (.docx), Markdown, web page or text files as new documents (File → Replace with file swaps a document's content, keeping the old version as a restore point). Word files keep their fonts, colours, sizes, alignment, lists, tables with merged cells, images, links, page setup, header and footer page numbers, and comments with replies; an import report lists anything converted or left out. File → Download saves Word, PDF, web page, Markdown or plain text. Next: M8, hardening.
+**M7 (import and export):** Import file on the list page or File → Open file brings in Word (.docx), Markdown, web page or text files as new documents (File → Replace with file swaps a document's content, keeping the old version as a restore point). Word files keep their fonts, colours, sizes, alignment, lists, tables with merged cells, images, links, page setup, header and footer page numbers, and comments with replies; an import report lists anything converted or left out. File → Download saves Word, PDF, web page, Markdown or plain text.
+
+**M8 (hardening) is in progress.** Backups are built: the account menu on the document list has **Download backup**, which saves every member, every document — soft-deleted ones included — and every image as one NDJSON file. `npm run restore -- --file <backup>` puts it back into a local instance, keeping document ids so images still resolve. Passkeys are never backed up (they are bound to a device), so a restored instance needs a fresh invite; see [§8.5 of the plan](docs/colo-plan.md) for the runbook. Still to come in M8: a point-in-time-recovery check, a security review, Workers Builds CI, a metrics review and a mobile pass.

@@ -1,7 +1,7 @@
 # Colo — Build & Deployment Plan
 
-**Status:** Draft v4.12
-**Date:** 19 September 2026
+**Status:** Draft v4.13
+**Date:** 20 September 2026
 **Owner:** SWC
 **Platform:** Cloudflare Workers (Free plan)
 **Scale target:** 1–2 monthly active users (personal project)
@@ -30,6 +30,8 @@
 | v4.10 | 19 Sep 2026 | **M6 built** (commits `e758d4b`…`787ac29`), not yet deployed. **Images:** one SQLite row per image (≤ 1 MB fits under the 2 MB row limit), so the planned `image_chunks` table and width/height columns are dropped; 200 MB of images per document. The browser sends images that already fit (≤ 2048 px, ≤ 1 MB, allowed type) untouched, so screenshots stay sharp and GIFs keep their animation; others become WebP (JPEG where the browser cannot encode WebP). Our own node view instead of Tiptap's resizable one, which ignores remote size changes and never commits touch resizes. Alignment is the paragraph `textAlign` attribute. **Restore points:** `unstable_replaceDocument` only rewinds root types the snapshot already had and treats every root as a map, so a comments map created after a point survived a restore; `replaceState` (`src/worker/restore-points.ts`) uses the same UndoManager approach over the fixed `ROOT_TYPES`. An automatic point is the previously saved state, taken before a save at most every 30 minutes, and never of an empty document. `restore_points` gains `created_by_name`. Document routes for images and restore points are authorised by Workspace (`authorizeRequest`, no writes) and served by the Document object. Also fixed: a session extended on a route other than `/api/me` no longer leaves the browser's cookie behind; a late first `/api/me` no longer signs out a member who has just registered (the intermittent e2e sign-in failure); connection notices clear themselves |
 | v4.11 | 19 Sep 2026 | **M6 review** (commits `696ee16`, `318a737`). Ctrl+Alt+M on a selected image no longer starts a comment that could never be anchored (the `comment` mark only applies to text). IDs are now monotonic ULIDs: ones made in the same millisecond used to sort randomly, which made "newest first" and "drop the oldest" unreliable for restore points saved close together. Pruning always keeps the point just saved, so a pre-restore copy survives even when 50 named points exist. Docs brought up to date: stack, repository layout, image nodes in §3.3, image limits in §4.3 and §10 |
 | v4.12 | 20 Sep 2026 | **M5 and M6 deployed. M7 built** (commits `ca0b81a`…`70e4ccc`), not yet deployed. Import and export, going beyond DOCX to what Google Docs offers within Colo's limits: open Word, Markdown, web page and text files; download Word, PDF (print), web page, Markdown and text. **Our own DOCX reader instead of `mammoth`** ([ADR 0005](decisions/0005-own-docx-reader.md)): mammoth drops fonts, colours, sizes, alignment, headers, footers and page setup by design. The reader (fflate + DOMParser) resolves Word's style inheritance and reads lists, merged table cells, images, links, fields, page setup, header/footer page numbers and comment threads with replies and resolved state; tracked changes are accepted, footnotes become a Notes list, and an import report lists every conversion and loss. `docx` writes exports with Colo's look as Word styles, and the reader leaves formatting equal to that look unmarked, so a document round-trips unchanged. Converters load on first use (a separate ~140 KB gzipped chunk). File → Replace with file saves an `import` restore point first. Also fixed: headings are limited to the four levels the editor offers (pasted h5/h6 showed as unstyled "Normal text") |
+
+| v4.13 | 20 Sep 2026 | **M7 deployed. M8 backups built** (commits `72273f4`…`ea0195a`). The repository is now public at `github.com/manan-vala/colo`. Backup and restore as NDJSON, one record per line (§8.5): the Yjs state keeps the 1.9 MB chunking it is stored with, so neither object holds a whole document in memory, and a trailing `end` record is the only way to tell a complete backup from a truncated one. Images are included — they are SQLite rows, not part of the Yjs state, so a state-only backup would have restored with every image broken. **Document ids are preserved, never reminted**, because an image's `src` embeds its document id. Passkeys and sessions are never exported: bound to the relying party and to a device, so unusable elsewhere, and a liability in a downloaded file. Restore lives behind `requireAdmin`, which 404s while `ADMIN_TOKEN` is unset, so the destructive route does not exist in production. Two things found while building: committing a restore had to reset the document's metadata flags, or the debounced save that follows would stamp every restored document as edited just now (`replaceState` looks like an edit to the update observer, and a restored title pushes immediately); and guarding the export with `Origin` broke the browser, which omits it on same-origin GETs — `Sec-Fetch-Site` is the header for that. Deviation from §4.1: the export is streamed NDJSON rather than one JSON object, and carries images |
 
 Earlier designs remain readable in git history.
 
@@ -274,9 +276,10 @@ Text documents are tens to hundreds of kilobytes of Yjs state; images are capped
 | `GET /api/docs/:id/restore-points` | Worker → Document | Session (checked by Workspace) | `{ points }`, newest first |
 | `POST /api/docs/:id/restore-points` | Worker → Document | Session (checked by Workspace) | Create a restore point; body `{ label, kind? }` (1–100 characters; `kind` is `named` by default, or `import` before a file replaces the document) |
 | `POST /api/docs/:id/restore-points/:pointId/restore` | Worker → Document | Session (checked by Workspace) | Restore; saves a `pre-restore` point first; returns `{ restored, saved }` |
-| `GET /api/export` | Workspace → Documents | Session | Backup: members, document index and each document's Yjs state (base64) |
+| `GET /api/export` | Workspace → Documents | Session | Backup as NDJSON (§8.5): members, the document index including soft-deleted rows, and each document's Yjs state and images (base64). Streamed, `Content-Disposition: attachment` |
+| `POST /api/admin/restore` | Workspace → Documents | `ADMIN_TOKEN` | Applies one NDJSON batch of a backup; `?overwrite=1` to write over documents that are already there. `404` when the secret is unset, so it does not exist in production |
 
-Every `POST`, `PATCH`, `DELETE` and WebSocket upgrade must carry an `Origin` header equal to `ORIGIN`; anything else gets `403`. For document routes, the Worker strips any incoming `x-colo-member` header and sets it only after Workspace authorises the request. Durable Objects are not reachable from the internet except through the Worker.
+Every `POST`, `PATCH`, `DELETE` and WebSocket upgrade must carry an `Origin` header equal to `ORIGIN`; anything else gets `403`. `GET /api/export` is additionally checked with `Sec-Fetch-Site`, because browsers omit `Origin` on same-origin GETs: a cross-site fetch or embed is refused, while a same-origin one and a request from a script (which sends neither header, so is not a browser being steered by someone else's page) pass. For document routes, the Worker strips any incoming `x-colo-member` header and sets it only after Workspace authorises the request. Durable Objects are not reachable from the internet except through the Worker.
 
 ### 4.2 WebSocket protocol
 
@@ -494,7 +497,39 @@ Private GitHub repository connected to **Workers Builds**: build `npm ci && npm 
 
 - **Code:** `npx wrangler rollback`; additive migrations keep older code working.
 - **Documents:** restore points inside each document (F9).
-- **Everything:** `/api/export` backup. Durable Object SQLite point-in-time recovery (30 days) may exist on the Free plan — verify in M8 before relying on it.
+- **Everything:** the `/api/export` backup, below. Durable Object SQLite point-in-time recovery (30 days) may exist on the Free plan — still to verify; until then the backup is the only full copy.
+
+#### Taking a backup (M8)
+
+The account menu on the document list → **Download backup** saves `colo-backup-<date>.ndjson`: one JSON record per line — a header, every member, the document index *including soft-deleted rows* (D8), then each document's Yjs state and its images as base64. The state keeps the 1.9 MB chunking it is stored with (§3.2), so neither Durable Object ever holds a whole document in memory, and the last line is an `end` record, which is the only way to tell a complete backup from a truncated one.
+
+**Passkeys and sessions are never in it.** A passkey is bound to the relying party and to a device, so a restored one could not be used anywhere else, and a live session hash has no business in a file that sits in a Downloads folder. A restored instance therefore needs a fresh invite before anyone can sign in.
+
+**What it cannot include:** edits still inside the 2 s / 10 s save debounce (§9.3), because the export reads SQLite rather than waking each document; and restore points, which are per-document history rather than data.
+
+#### Restoring into a local instance
+
+```bash
+# 1. ADMIN_TOKEN must be in .dev.vars, then start the Worker — and do not open the app yet.
+npm run dev
+
+# 2. Apply the backup. --overwrite is needed if the instance already has documents.
+npm run restore -- --file colo-backup-2026-09-20.ndjson --overwrite
+
+# 3. Passkeys are not restorable, so enrol a fresh one.
+npm run invite -- --email <your email> --name "<Your Name>" --local
+```
+
+`createInvite` reuses an existing member row by email, so the restored member keeps its id — and therefore its documents' `created_by` and its cursor colour.
+
+Two properties do the safety work:
+
+- **`POST /api/admin/restore` does not exist in production.** It sits behind `requireAdmin`, which answers 404 while `ADMIN_TOKEN` is unset, and production deletes that secret once both passkeys are enrolled (§8.2). The script also refuses a non-localhost target without `--force`.
+- **Ids are preserved, never reminted.** An image's `src` embeds its document id (`imagePath`), so a restore that minted new ids would break every image in every document. Every write is an upsert keyed on the id from the backup, so running the same file twice changes nothing and a failed run can simply be repeated. Nothing is ever deleted: rows in the backup win, rows not in it are left alone.
+
+Do not open the app while a restore is running. A document over 1.9 MB arrives as several chunks, and a reader that loads it between them would see a torn state.
+
+**Ceiling to watch:** the export makes one Durable Object subrequest per document. The Workers Free plan caps subrequests per invocation (50 is the documented figure), which would put a ceiling on the number of documents one export can cover. Local dev does not enforce it — an export of 167 documents and 90 MB succeeded — so this is **unverified on the deployed Worker** and should be checked before the workspace grows. If it binds, the fix is to page the export per document rather than fan out from Workspace.
 
 ---
 
@@ -541,7 +576,9 @@ Assumptions: both people actively type for 3 hours each (about 3 edits per secon
 - **Revocation:** logout and member disabling close document sockets across all Document objects.
 - **Browser:** CSP with `script-src 'self'` and `frame-ancestors 'none'`; `style-src` allows inline styles (§6.3). Pasted and imported HTML is parsed in an inert document through the editor schema, which drops unknown elements and attributes; imported files never load anything from other sites. DOCX files are limited to 50 MB and 200 MB unzipped, checked before inflating (zip bombs). Header/footer text is escaped. SVG images are rejected, and pasted content keeps only Colo's own images.
 - **Abuse limits:** message, rate and document size caps per connection.
-- **Data:** encrypted at rest by Cloudflare; restore points per document; `/api/export` backups.
+- **Data:** encrypted at rest by Cloudflare; restore points per document; `/api/export` backups (§8.5), which carry no passkeys and no sessions, and are refused on a cross-site fetch.
+- **No headless read of production.** The export is session-only — it deliberately does *not* accept `ADMIN_TOKEN`, which would have defeated deleting that secret after enrolment — and the restore route is admin-token-only, so it does not exist in production at all. Taking a backup means signing in with a passkey; restoring means having the secret, which production does not.
+- **A backup is untrusted input.** Restoring an image re-runs the checks an upload gets: the bytes must match the declared type (so SVG and anything else that can carry script stays out) and the size limits still apply.
 
 **Residual risks:**
 
@@ -566,7 +603,7 @@ Assumptions: both people actively type for 3 hours each (about 3 edits per secon
 | **M5 — Comments** ✅ built, ✅ deployed | Comment mark, thread storage, margin cards, replies, resolve/reopen, detached threads | `npm run e2e:comments` ✅ on the production build: comments, replies, edits and deletes sync live; highlight and card aligned (0 px); overlapping threads; resolve/reopen; detached and re-attached on undo; undo of typing keeps comments; paste does not copy them; a draft survives the other person's edits; no highlights in print; phone panel. Unit tests for the model, anchors, margin layout and highlight CSS. "Restore with restore points" is checked in M6. Deployed 19–20 Sep 2026 | Commits `0d39e67`…`3db4226` |
 | **M6 — Images and restore points** ✅ built, ✅ deployed | Upload, paste, resize and alignment of images; automatic and named restore points; restore with `pre-restore` copy | `npm run e2e:images` ✅ and `npm run e2e:restore` ✅ on the production build: picked and pasted images reach the other browser; a 4000×3000 paste is stored as WebP, 0.97 MB, 2048×1536; resizing and centring sync; eight images add ~1.5 KB to the shared document and none crosses a page edge; pasted HTML keeps only Colo's images; images print. A restore brings back the text and its comment and removes the newer comment in both browsers, with a notice; Ctrl+Z does not revert it; the pre-restore copy restores the newer version. Unit tests: image API (types, signatures, limits, a 30-image document), `replaceState`, the restore API with two Yjs clients, automatic points, retention and ID order. **Known limits:** an image pasted from another document still points at that document; images are never deleted. Deployed 19–20 Sep 2026 | Commits `e758d4b`…`787ac29`, review fixes `696ee16`, `318a737` |
 | **M7 — Import and export** ✅ built | Import (content, tables, images, page size, margins) and export (content, tables, images, page settings, headers/footers, page numbers, comments); beyond the plan: Markdown, web page and text both ways, PDF via print, replace with file, import report | `npm run e2e:convert` ✅ on the production build: a Word-made file imports with headings, merged cells, image, comment thread with reply, title, Letter landscape and header page numbers in both browsers; its Word export imports back to identical text and opens in Word (checked through COM: table, picture, 3 comments with a reply and a resolved one, header, footer, page setup); Markdown, web page and text downloads; replace with file keeps a restore point. Unit tests: 15 reader tests on the Word fixture and edge cases (field links, unsafe links, equations, EMF, charts, list counting, zip bomb, damaged files), a round trip of every supported feature, Markdown and text. **Known losses** (listed in the import report): line and paragraph spacing, columns, equations, charts and SmartArt, embedded objects, EMF/WMF/TIFF images, first-page/even headers, centred header text; footnotes become a Notes list; tracked changes are accepted; floating images and text boxes go in line. LibreOffice not checked automatically. **Still pending:** deploy | Commits `ca0b81a`…`70e4ccc` |
-| **M8 — Hardening** | `/api/export`; PITR check; security review; Workers Builds CI; metrics review; mobile pass | Backup restores to a local instance; CI deploys from `main` | 2 days |
+| **M8 — Hardening** ◐ in progress | `/api/export`; PITR check; security review; Workers Builds CI; metrics review; mobile pass | **Backups ✅ built:** `npm test` covers the format, the SQL and the refusals, including that no passkey or session can ever be written; `npm run e2e:backup` is the acceptance check — a document with text and an image is exported through the account menu (90 MB reached disk), wrecked, restored with `npm run restore`, and comes back with its image still serving from the same URL, which proves the id survived, and without being counted as an edit. **Still to do:** PITR check, security review, Workers Builds CI, metrics review, mobile pass | 2 days |
 
 **Total:** about 17–24 working days after M0.
 

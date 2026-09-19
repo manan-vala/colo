@@ -6,7 +6,7 @@ Colo is a private, browser-based document editor for **two people**, styled like
 
 ## Current status (20 Sep 2026)
 
-M0–M6 are **built and deployed** to `colo.manan-vala.workers.dev`:
+M0–M7 are **built and deployed** to `colo.manan-vala.workers.dev`:
 - Invite-only passkey auth (no passwords)
 - Collaborative documents: per-document Durable Object, Yjs CRDT sync, hibernating WebSockets, live cursors
 - Docs-style editor shell: File/Edit/View/Insert/Format menus, full formatting toolbar, fonts, colors, links, lists, tables, outline panel, zoom
@@ -22,16 +22,19 @@ M0–M6 are **built and deployed** to `colo.manan-vala.workers.dev`:
 - A new top-level Yjs type must be added to `ROOT_TYPES` in `doc-schema.ts`, or restores will not rewind it.
 - IDs from `ulid()` (`src/worker/http.ts`) are monotonic within an isolate; restore points rely on ID order for "newest first".
 
-**M7 — import and export is built but not deployed** (run `npm run deploy` when ready). `src/client/convert/` (ADR 0005), loaded with dynamic `import()` only:
+**M7 — import and export.** `src/client/convert/` (ADR 0005), loaded with dynamic `import()` only:
 - `docx/`: our own reader (fflate + an injected XML parser; styles, numbering, comments, sections, drawings, body) and a writer on the `docx` library.
 - `markdown.ts`, `html.ts`, `text.ts`, and `index.ts` (entry points).
 - `apply.ts`: uploads images and applies an import to a document.
 - `defaults.ts`: Colo's text look. The writer uses it for Word styles and the reader omits formatting equal to it; keep it in step with `index.css`.
 - UI: `doc/useFileTransfers.tsx`, `doc/imports.ts`, `doc/ImportReportDialog.tsx`, and the Home "Import file" button.
 
-**Next up: M8 — hardening.** See §11 of the plan (`/api/export`, PITR check, security review, Workers Builds CI, metrics, mobile pass).
+**M8 — hardening, in progress.** Backups are built (§8.5 of the plan): `src/worker/backup.ts` holds the NDJSON format and both directions, `GET /api/export` streams it from Workspace with each Document object adding its own records, and `POST /api/admin/restore` reads it back — behind `requireAdmin`, so it 404s in production where `ADMIN_TOKEN` is deleted. `scripts/restore.ts` drives it; `src/client/backup.ts` plus the account menu in `Home.tsx` is the download.
+- **Document ids are preserved on restore, never reminted** — an image's `src` embeds its document id, so reminting would break every image.
+- **Passkeys and sessions are never exported.** If you add a record type, the allow-list in `test/backup.test.ts` is what stops credential material leaking into a downloaded file.
+- **Committing a restore resets the document's metadata flags.** `replaceState` looks like an edit to the observer in `onLoad`, and a restored title pushes immediately, so without the reset every restored document gets stamped as edited just now.
 
-**Not built yet** — don't assume these exist: `/api/export` backups (M8), Workers Builds CI (M8).
+**Not built yet** — don't assume these exist: Workers Builds CI, the PITR check, the security review, the metrics review and the mobile pass (all M8).
 
 ## Stack
 
@@ -45,7 +48,7 @@ npm test             # Vitest inside workerd (real Durable Objects/SQLite)
 npm run build        # tsc -b, then vite build
 npm run deploy       # build, then wrangler deploy
 npm run cf-typegen   # regenerate worker-configuration.d.ts after editing wrangler.jsonc
-npm run e2e:auth | e2e:collab | e2e:formatting | e2e:pages | e2e:comments | e2e:images | e2e:restore | e2e:convert   # puppeteer + Chrome virtual passkeys, two-browser tests (need a server on :5173)
+npm run e2e:auth | e2e:collab | e2e:formatting | e2e:pages | e2e:comments | e2e:images | e2e:restore | e2e:convert | e2e:backup   # puppeteer + Chrome virtual passkeys, two-browser tests (need a server on :5173)
 npm run e2e:comments-perf   # typing with many comment threads; run against `npm run build && npx vite preview --port 5173`
 COLO_URL=https://… npm run e2e:gate              # deployed-Worker gate (hibernation, reconnect through a redeploy)
 ```
@@ -68,7 +71,7 @@ COLO_URL=https://… npm run e2e:gate              # deployed-Worker gate (hiber
 
 ```
 src/client/   React SPA — home/ (doc list, import), doc/ (editor shell, page setup, restore points, import/export UI, print styles), editor/ (Tiptap setup, toolbar, pages/ = pagination, images/), comments/, convert/ (import/export, lazy), collab/ (provider, page settings, tracked positions), auth/, assets/
-src/worker/   Worker router + both Durable Object classes (workspace.ts, document.ts) + storage.ts, images.ts, restore-points.ts, auth.ts, documents.ts, db.ts
+src/worker/   Worker router + both Durable Object classes (workspace.ts, document.ts) + storage.ts, images.ts, restore-points.ts, backup.ts, auth.ts, documents.ts, db.ts
 src/shared/   Shared by client and Worker: protocol.ts (API, limits), doc-schema.ts (Yjs structure, page settings)
 e2e/          Puppeteer two-browser + deployed-gate tests
 test/         Vitest unit/integration tests (run inside workerd); test/convert/ = converter tests and Word fixtures
