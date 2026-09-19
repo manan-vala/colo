@@ -11,6 +11,7 @@ import {
 } from "../src/shared/protocol";
 import type { Document } from "../src/worker/document";
 import { AUTO_POINT_INTERVAL, createPoint, listPoints, replaceState } from "../src/worker/restore-points";
+import { ulid } from "../src/worker/http";
 import { call, enroll } from "./helpers/api";
 import { connect, eventually } from "./helpers/yclient";
 
@@ -178,6 +179,14 @@ describe("restore points API", () => {
   });
 });
 
+describe("IDs", () => {
+  it("sort in creation order even within one millisecond", () => {
+    const ids = Array.from({ length: 200 }, () => ulid(1_700_000_000_000));
+    expect([...ids].sort()).toEqual(ids);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+});
+
 describe("automatic points and retention", () => {
   it("never keeps an empty document", async () => {
     const { cookie } = await enroll();
@@ -224,6 +233,20 @@ describe("automatic points and retention", () => {
       expect(points.filter((p) => p.kind === "named")).toHaveLength(5);
       const chunks = state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM restore_point_chunks").one().n;
       expect(chunks).toBe(LIMITS.restorePoints);
+    });
+  });
+
+  it("never drops the point it has just saved, even when every other point is named", async () => {
+    const { cookie } = await enroll();
+    const docId = await newDoc(cookie);
+    await runInDurableObject(documentStub(docId), async (_instance, state) => {
+      const snapshot = new Uint8Array([0]);
+      for (let i = 0; i < LIMITS.restorePoints; i++) createPoint(state.storage, { kind: "named", label: `n${i}`, state: snapshot });
+      const copy = createPoint(state.storage, { kind: "pre-restore", state: snapshot });
+      const points = listPoints(state.storage.sql);
+      expect(points).toHaveLength(LIMITS.restorePoints);
+      expect(points.map((p) => p.id)).toContain(copy.id);
+      expect(points.map((p) => p.label)).not.toContain("n0"); // the oldest named point goes
     });
   });
 });

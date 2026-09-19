@@ -71,13 +71,35 @@ export function randomToken(bytes = 32): string {
 
 const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
-/** ULID: 48-bit millisecond timestamp + 80 random bits, Crockford base32. */
+let lastTime = -1;
+let lastRandom: number[] = [];
+
+/**
+ * Monotonic ULID: 48-bit millisecond timestamp + 80 random bits, Crockford base32. Within one
+ * millisecond the random part is the previous one plus one, so IDs made by this isolate always
+ * sort in creation order (restore points rely on it for "newest first").
+ */
 export function ulid(now = Date.now()): string {
   let time = "";
   for (let i = 0, t = now; i < 10; i++, t = Math.floor(t / 32)) time = CROCKFORD[t % 32] + time;
-  let random = "";
-  for (const byte of crypto.getRandomValues(new Uint8Array(16))) random += CROCKFORD[byte % 32];
-  return time + random;
+  // In the same millisecond, `increment` advances lastRandom in place.
+  if (now !== lastTime || !increment(lastRandom)) {
+    lastTime = now;
+    lastRandom = [...crypto.getRandomValues(new Uint8Array(16))].map((byte) => byte % 32);
+  }
+  return time + lastRandom.map((digit) => CROCKFORD[digit]).join("");
+}
+
+/** Adds one to base-32 digits in place; false if they overflow (then fresh randomness is used). */
+function increment(digits: number[]): boolean {
+  for (let i = digits.length - 1; i >= 0; i--) {
+    if (digits[i] < 31) {
+      digits[i]++;
+      return true;
+    }
+    digits[i] = 0;
+  }
+  return false;
 }
 
 export function isoNow(): string {

@@ -66,7 +66,7 @@ export function createPoint(storage: DurableObjectStorage, point: NewPoint): Res
     splitChunks(point.state).forEach((chunk, seq) =>
       sql.exec("INSERT INTO restore_point_chunks (point_id, seq, data) VALUES (?, ?, ?)", row.id, seq, chunk.buffer),
     );
-    prunePoints(sql, LIMITS.restorePoints);
+    prunePoints(sql, LIMITS.restorePoints, row.id);
   });
   return toPoint(row);
 }
@@ -95,13 +95,18 @@ export function latestPointAt(sql: SqlStorage): number {
   return row.at ? Date.parse(row.at) : 0;
 }
 
-/** Keeps the newest `keep` points, dropping automatic and pre-restore points before named ones. */
-export function prunePoints(sql: SqlStorage, keep: number): void {
+/**
+ * Keeps the newest `keep` points, dropping automatic and pre-restore points before named ones.
+ * The point just created (`newest`) always stays, even when the others are all named: it may be
+ * the pre-restore copy that makes a restore reversible.
+ */
+export function prunePoints(sql: SqlStorage, keep: number, newest: string): void {
   const doomed = sql
     .exec<{ id: string }>(
       `SELECT id FROM restore_points
-        ORDER BY kind = 'named' DESC, created_at DESC, id DESC
+        ORDER BY id = ? DESC, kind = 'named' DESC, created_at DESC, id DESC
         LIMIT -1 OFFSET ?`,
+      newest,
       keep,
     )
     .toArray();
