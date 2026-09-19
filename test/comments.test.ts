@@ -14,6 +14,7 @@ import {
   setResolved,
   threadsMap,
 } from "../src/client/comments/model";
+import { commentStyles } from "../src/client/comments/highlight";
 import { layoutRail } from "../src/client/comments/rail-layout";
 
 const alex = { id: "M-ALEX", name: "Alex" };
@@ -185,5 +186,27 @@ describe("comment rail layout", () => {
   it("handles no cards and an unknown active card", () => {
     expect(layoutRail([], "x").size).toBe(0);
     expect(layoutRail([item("a", 50)], "missing").get("a")).toBe(50);
+  });
+});
+
+describe("comment highlights", () => {
+  const id = "0f8fad5b-d9cb-469f-a165-70867728950e";
+
+  it("highlights open threads, the active one more strongly, only on screen", () => {
+    const css = commentStyles([id, "other-1"], id);
+    expect(css).toContain(`[data-comment-id="${id}"]`);
+    expect(css).toContain('[data-comment-id="other-1"]');
+    expect(css.match(/background-color/g)).toHaveLength(2);
+    expect(css.startsWith("@media screen")).toBe(true);
+  });
+
+  it("emits nothing without open threads", () => {
+    expect(commentStyles([], null)).toBe("");
+  });
+
+  it("never puts an unsafe thread ID into the stylesheet", () => {
+    const css = commentStyles(['x"] { } body { display: none } [a="', id], null);
+    expect(css).not.toContain("display: none");
+    expect(css).toContain(id);
   });
 });

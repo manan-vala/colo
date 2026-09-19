@@ -12,6 +12,7 @@ import { Placeholder } from "@tiptap/extensions";
 import StarterKit from "@tiptap/starter-kit";
 import { CONTENT_FIELD } from "../../shared/doc-schema";
 import type { Collaboration as CollaborationState } from "../collab/useCollaboration";
+import { CommentMark } from "../comments/comment-mark";
 import { DocsFormatting } from "./extensions/docs-shortcuts";
 import { Indent } from "./extensions/indent";
 import { PageBreak, PagedTableView, Pagination } from "./pages";
@@ -60,6 +61,7 @@ export function buildExtensions(collab: CollaborationState): AnyExtension[] {
     DocsFormatting,
     PageBreak,
     Pagination,
+    CommentMark,
     Placeholder.configure({ placeholder: "Start typing…" }),
     Collaboration.configure({ document: collab.doc, field: CONTENT_FIELD }),
     CollaborationCaret.configure({ provider: collab.provider, user: collab.user }),
