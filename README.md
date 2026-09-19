@@ -16,6 +16,7 @@ Runs entirely on the **Cloudflare Workers Free plan** at $0/month, using only op
 - [ADR 0001 — Move from AWS to Cloudflare](docs/decisions/0001-move-from-aws-to-cloudflare.md)
 - [ADR 0002 — Passkey sign-in on workers.dev](docs/decisions/0002-passkey-auth-on-workers-dev.md)
 - [ADR 0003 — Collaborative document engine: Tiptap + Yjs on per-document Durable Objects](docs/decisions/0003-collaborative-document-engine.md)
+- [ADR 0004 — Our own pagination engine instead of tiptap-pagination-plus](docs/decisions/0004-own-pagination-engine.md)
 
 ## Development
 
@@ -38,6 +39,7 @@ Browser smoke tests drive the local Chrome with virtual passkeys (start `npm run
 npm run e2e:auth     # invite → passkey → sign out → sign in
 npm run e2e:collab   # two people co-edit a document
 npm run e2e:formatting   # every toolbar and menu action reaches the other browser (M3)
+npm run e2e:pages    # 50-page document, headers/footers, page breaks, print (M4); PDF_PATH=… saves the PDF
 COLO_URL=https://… npm run e2e:gate   # M2 gate on a deployed Worker (hibernation, deploy mid-typing)
 ```
 
@@ -59,8 +61,8 @@ colo/
   components.json         # shadcn/ui config
   public/_headers         # security and cache headers for static assets
   src/
-    client/               # React SPA (components/ui = shadcn/ui)
-    worker/               # Worker router + Workspace Durable Object
+    client/               # React SPA (components/ui = shadcn/ui; editor/pages = pagination)
+    worker/               # Worker router + Workspace and Document Durable Objects
     shared/               # types shared by client and Worker
   scripts/                # admin scripts (M1)
   test/
@@ -69,6 +71,6 @@ colo/
 
 ## Status
 
-M0 (skeleton) is deployed at <https://colo.manan-vala.workers.dev>: the SPA, the Worker router and an empty SQLite-backed Workspace Durable Object (running in SIN) answering `GET /api/health`.
+Colo runs at <https://colo.manan-vala.workers.dev>. **M1 (passkey sign-in), M2 (collaborative documents) and M3 (Google Docs-style editor UI) are built and deployed** — menus, toolbar, fonts, colours, links, lists, tables, outline, zoom, plus branding (logo, favicon, home-screen banner).
 
-Plan v4 turns Colo into a collaborative document editor (§11 of the plan). **M1 (passkey sign-in), M2 (collaborative documents) and M3 (Google Docs-style editor UI) are built and deployed** — menus, toolbar, fonts, colours, links, lists, tables, outline, zoom, plus branding (logo, favicon, home-screen banner). Next: M4, real pages (pagination, headers/footers, page numbers, print).
+**M4 (real pages) is built, not yet deployed:** A4/Letter pages in portrait or landscape, margins, one-line headers and footers with `{page}` and `{total}` ("Page X of Y"), page breaks (Ctrl/⌘+Enter), tables that split between rows, File → Page setup, Insert → Page numbers, and printing one sheet per page. Narrow screens and pageless documents stay continuous. Next: M5, comments.

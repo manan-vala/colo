@@ -1,6 +1,6 @@
 # ADR 0003 — Collaborative document engine: Tiptap + Yjs on per-document Durable Objects
 
-**Status:** Accepted
+**Status:** Accepted; the "Real pages" part of decision 1 is amended by [ADR 0004](0004-own-pagination-engine.md)
 **Date:** 15 September 2026
 **Supersedes:** the Tier A notes design (textarea + Markdown, `version`-column conflicts) in `docs/colo-plan.md` v3.1
 **Related:** [ADR 0001](0001-move-from-aws-to-cloudflare.md), [ADR 0002](0002-passkey-auth-on-workers-dev.md)

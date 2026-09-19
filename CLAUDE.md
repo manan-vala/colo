@@ -2,9 +2,9 @@
 
 Colo is a private, browser-based document editor for **two people**, styled like Google Docs: simultaneous typing with live cursors, rich formatting, real pages, comments, and DOCX import/export. It runs entirely on the **Cloudflare Workers Free plan** with no payment method on the account — **$0/month by construction**, every dependency is open source and self-hosted, nothing calls a third-party service.
 
-**Read [docs/colo-plan.md](docs/colo-plan.md) before making non-trivial changes.** It is the living source of truth: architecture, data model, API, security posture, cost model, and the milestone-by-milestone build plan with a revision history explaining *why* each choice was made. This file is a fast-loading summary, not a replacement for it. The three ADRs in `docs/decisions/` explain the platform (AWS→Cloudflare), auth (passkeys on workers.dev) and editor engine (Tiptap+Yjs) decisions in depth.
+**Read [docs/colo-plan.md](docs/colo-plan.md) before making non-trivial changes.** It is the living source of truth: architecture, data model, API, security posture, cost model, and the milestone-by-milestone build plan with a revision history explaining *why* each choice was made. This file is a fast-loading summary, not a replacement for it. The ADRs in `docs/decisions/` explain the platform (AWS→Cloudflare), auth (passkeys on workers.dev), editor engine (Tiptap+Yjs) and pagination engine (our own, 0004) decisions in depth.
 
-## Current status (15 Sep 2026)
+## Current status (19 Sep 2026)
 
 M0–M3 are **built and deployed** to `colo.manan-vala.workers.dev`:
 - Invite-only passkey auth (no passwords)
@@ -12,9 +12,11 @@ M0–M3 are **built and deployed** to `colo.manan-vala.workers.dev`:
 - Docs-style editor shell: File/Edit/View/Insert/Format menus, full formatting toolbar, fonts, colors, links, lists, tables, outline panel, zoom
 - Branding: black logo mark (auth screens, document-list header), white favicon variant, home-screen banner image
 
-**Next up: M4 — real pages** (A4/Letter pagination, margins, headers/footers, page numbers, table splitting, print stylesheet). See §11 of the plan for the full milestone table (M5 comments, M6 images/restore points, M7 DOCX import/export, M8 hardening/CI).
+**M4 — real pages is built but not deployed** (run `npm run deploy` when ready): page settings in the Yjs `settings` map, our own decoration-only paginator in `src/client/editor/pages/` (ADR 0004 — `tiptap-pagination-plus`/`tiptap-table-plus` are *not* used), page breaks, Page setup dialog, print CSS. Page geometry is computed from settings (`layout.ts`); only content height is measured.
 
-**Not built yet** — don't assume these exist: DOCX export/import (M7, nothing in `docx`/`mammoth` is installed), images (M6), comments (M5), pagination (M4), `/api/export` backups (M8), Workers Builds CI (M8).
+**Next up: M5 — comments.** See §11 of the plan for the full milestone table (M6 images/restore points, M7 DOCX import/export, M8 hardening/CI).
+
+**Not built yet** — don't assume these exist: DOCX export/import (M7, nothing in `docx`/`mammoth` is installed), images (M6), restore points (M6), comments (M5), `/api/export` backups (M8), Workers Builds CI (M8).
 
 ## Stack
 
@@ -28,7 +30,7 @@ npm test             # Vitest inside workerd (real Durable Objects/SQLite)
 npm run build        # tsc -b, then vite build
 npm run deploy       # build, then wrangler deploy
 npm run cf-typegen   # regenerate worker-configuration.d.ts after editing wrangler.jsonc
-npm run e2e:auth | e2e:collab | e2e:formatting   # puppeteer + Chrome virtual passkeys, two-browser tests
+npm run e2e:auth | e2e:collab | e2e:formatting | e2e:pages   # puppeteer + Chrome virtual passkeys, two-browser tests (need a server on :5173)
 COLO_URL=https://… npm run e2e:gate              # deployed-Worker gate (hibernation, reconnect through a redeploy)
 ```
 
@@ -41,14 +43,16 @@ COLO_URL=https://… npm run e2e:gate              # deployed-Worker gate (hiber
 - **No Claude attribution in commits.**
 - **Cost discipline is a hard constraint, not a preference.** Every design choice in the plan (whole-state debounced saves instead of per-keystroke rows, hibernating sockets, hidden-tab disconnect, per-connection rate/size caps) exists to stay inside the Workers Free daily limits — see §9 of the plan before changing anything touching Durable Object messages, storage rows, or duration.
 - **Two trusted users, not a multi-tenant app.** Every member can read/write every document (D7 in the plan); don't add authorization complexity the plan explicitly deferred.
+- **Pagination is decoration-only.** Never write page-derived data into the Yjs document; pages are computed per browser. Blocks that establish a formatting context (table rows, `hr`, flex list items) need an explicit full width on paged screens, or the browser squeezes them into the zero-width gap beside a margin band (see `index.css`).
+- **e2e helpers live in `e2e/browser.ts`** (`enroll`, `press`, `openMenubar`, `chooseMenuItem`, `editorText`); don't copy them into scripts.
 - When a milestone lands, the established pattern is: bump `docs/colo-plan.md`'s revision-history table (§0) and milestone table (§11) in the same or a following `docs:` commit, and update `README.md`'s Status paragraph.
 
 ## Repo layout
 
 ```
-src/client/   React SPA — home/ (doc list), doc/ (editor shell), editor/ (Tiptap setup), auth/, assets/
-src/worker/   Worker router + both Durable Object classes (workspace.ts, document.ts)
-src/shared/   Types shared by client and Worker (protocol.ts)
+src/client/   React SPA — home/ (doc list), doc/ (editor shell, page setup, print styles), editor/ (Tiptap setup, toolbar, pages/ = pagination), collab/ (provider, page settings), auth/, assets/
+src/worker/   Worker router + both Durable Object classes (workspace.ts, document.ts) + storage.ts, auth.ts, documents.ts, db.ts
+src/shared/   Shared by client and Worker: protocol.ts (API, limits), doc-schema.ts (Yjs structure, page settings)
 e2e/          Puppeteer two-browser + deployed-gate tests
 test/         Vitest unit/integration tests (run inside workerd)
 docs/         colo-plan.md (source of truth) + decisions/ (ADRs)

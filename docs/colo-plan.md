@@ -1,7 +1,7 @@
 # Colo — Build & Deployment Plan
 
-**Status:** Draft v4.5
-**Date:** 16 September 2026
+**Status:** Draft v4.7
+**Date:** 19 September 2026
 **Owner:** SWC
 **Platform:** Cloudflare Workers (Free plan)
 **Scale target:** 1–2 monthly active users (personal project)
@@ -23,6 +23,8 @@
 | v4.3 | 15 Sep 2026 | **M3 built** (commits `1f5618a`…`bea380f`): Docs-style shell and full F5 formatting set; CSP `style-src` relaxed as planned. Deviations: the outline reads headings from editor state instead of Tiptap's TableOfContents extension, so it never writes heading IDs into the shared document; paragraph styles are Normal text and Headings 1–4 (no Title/Subtitle); drag handles and UniqueID are deferred until a milestone needs them; the page canvas is Letter-sized without pagination until M4 |
 | v4.4 | 15 Sep 2026 | **M3 deployed to production.** Branding added outside the milestone plan (commits `a074fba`, `1327653`, `c1fa431`): a black wordmark SVG as the in-app logo (document list header, auth cards) and a white variant as the favicon (tab bars are usually dark chrome, so white reads better than black — it is a plain shape with no adaptive background, so it will be invisible on light-themed tab strips); a 1600×400 banner image between the navbar and the document list on the home screen, re-encoded from a 1.46 MB PNG to a ~200 KB WebP (quality 90) with no visible quality loss. No DOCX export exists yet — that is still M7 |
 | v4.5 | 16 Sep 2026 | **Home banner has four variants**, all 1600×400 WebP (quality 90, 19–200 KB each) in `src/client/assets/banners/`: the original purple mosaic plus three new sky photos (blue sky, golden hour, night sky). One is chosen at random when the app's JS module first loads and stays fixed for the rest of that load — including navigating away from and back to the document list — and a new one is picked only on an actual browser refresh, since that re-evaluates the module. No server involvement or persistence; purely a client-side cosmetic touch, so it needed no ADR |
+| v4.6 | 19 Sep 2026 | **Fixes from a codebase review** (commits `9e0ca48`, `1584b50`): a throttled document-list update lived only in memory, so a Document object evicted before its alarm never reported the last editor — it is now also kept in a `pending_meta` row (§3.2), and `updatedAt` is the time of the last edit; `document_sessions` rows of expired sessions are pruned at sign-in; create and rename update the Document object before the index. Chunked-state storage moved to `src/worker/storage.ts` as §7 intended. Plan corrections: §6.3 listed a `worker-src` directive the code never had (none is needed yet); `document_sessions`' key is `(session_hash, doc_id)`, which suits the per-session delete |
+| v4.7 | 19 Sep 2026 | **M4 built** (commits `6eed551`, `5b432ec`). `tiptap-pagination-plus` and `tiptap-table-plus` were not adopted after reading their source — table-plus rewrites whole tables in both browsers and drops cell selection; pagination-plus renders header text as HTML and has no `{total}` — so Colo has its own decoration-only pagination engine using the same float technique, with page geometry computed from the settings ([ADR 0004](decisions/0004-own-pagination-engine.md)). Tables keep Tiptap's schema; tables with vertically merged cells do not split. Default page is A4 with 1-inch margins. Headers and footers are one line of plain text per side. Not yet deployed |
 
 Earlier designs remain readable in git history.
 
@@ -126,7 +128,7 @@ Everything is served from one hostname, `colo.manan-vala.workers.dev`, so there 
 3. Worker forwards the upgrade to `DOCUMENT.getByName(docId, { locationHint: "apac" })`, replacing any client-supplied `x-colo-member` header with the authorised identity.
 4. The Document object accepts the socket as hibernatable, stores `{memberId, sessionHash, sessionExpiresAt}` in the connection state, loads the Yjs state from SQLite if it is not in memory, and runs the Yjs sync handshake. Cursors and names flow through Yjs awareness.
 
-**Editing.** Each local change is sent as a Yjs update and relayed to the other sockets. The object saves the merged state 2 s after edits pause, and at least every 10 s during continuous typing. It pushes `title`, `updatedAt` and `updatedBy` to Workspace for the document list — immediately when the title changed, otherwise at most once a minute.
+**Editing.** Each local change is sent as a Yjs update and relayed to the other sockets. The object saves the merged state 2 s after edits pause, and at least every 10 s during continuous typing. It pushes `title`, `updatedAt` and `updatedBy` to Workspace for the document list — immediately when the title changed, otherwise at most once a minute. A deferred update is also written to a `pending_meta` row, so an object evicted before its alarm still delivers it.
 
 **Disconnect, deploy, crash.** The provider reconnects with backoff and re-syncs; any edits the server lost are re-sent from the client. Deploys restart objects, so this path runs routinely.
 
@@ -165,12 +167,14 @@ CREATE TABLE documents (
 CREATE INDEX documents_live_by_updated ON documents(deleted_at, updated_at);
 
 CREATE TABLE document_sessions (                 -- which sessions opened which documents (revocation fan-out)
-  doc_id        TEXT NOT NULL REFERENCES documents(id),
-  session_hash  TEXT NOT NULL REFERENCES sessions(id_hash),
+  doc_id        TEXT NOT NULL,
+  session_hash  TEXT NOT NULL,
   connected_at  TEXT NOT NULL,
-  PRIMARY KEY (doc_id, session_hash)
+  PRIMARY KEY (session_hash, doc_id)             -- logout deletes by session
 ) WITHOUT ROWID;
 ```
+
+Rows of sessions that expired rather than signed out are pruned at the next sign-in.
 
 ### 3.2 Document Durable Object (SQLite, one database per document)
 
@@ -178,6 +182,12 @@ CREATE TABLE document_sessions (                 -- which sessions opened which 
 CREATE TABLE doc_state (                         -- Y.encodeStateAsUpdate(doc), split into chunks
   seq           INTEGER PRIMARY KEY,
   data          BLOB NOT NULL                    -- ≤ 1.9 MB (row limit is 2 MB)
+);
+
+CREATE TABLE pending_meta (                      -- a throttled document-list update awaiting its alarm
+  id            INTEGER PRIMARY KEY CHECK (id = 1),
+  updated_at    TEXT NOT NULL,
+  updated_by    TEXT
 );
 
 CREATE TABLE restore_points (
@@ -212,21 +222,21 @@ CREATE TABLE image_chunks (
 ) WITHOUT ROWID;
 ```
 
-`doc_state` ships in M2; `restore_points` and `images` arrive in M6. A save upserts the state chunks and deletes chunks beyond the new count, all in one `transactionSync()`. Save time and the last metadata push are kept in memory rather than in a `doc_meta` row, so a save costs exactly one row for documents under 1.9 MB. `WITHOUT ROWID` tables keep their primary key as the table itself, so chunk writes add no index rows.
+`doc_state` ships in M2, `pending_meta` in v4.6; `restore_points` and `images` arrive in M6. A save upserts the state chunks and deletes chunks beyond the new count, all in one `transactionSync()`, so a save costs exactly one row for documents under 1.9 MB. The metadata throttle is in memory while the object is awake; `pending_meta` is written only when an update is deferred or its editor changes, and deleted once sent — about three rows per minute of editing. `WITHOUT ROWID` tables keep their primary key as the table itself, so chunk writes add no index rows.
 
 ### 3.3 Inside the Yjs document
 
 | Shared type | Contents |
 |---|---|
 | `content` (`Y.XmlFragment`) | The Tiptap/ProseMirror document |
-| `settings` (`Y.Map`) | `title`, `pageSize` (`A4` \| `LETTER`), `margins` (mm), `header` and `footer` (left/right plain text with `{page}` / `{total}`), `pagination` on/off |
+| `settings` (`Y.Map`) | `title`, `pageSize` (`A4` \| `LETTER`), `orientation` (`portrait` \| `landscape`), `margins` (mm), `header` and `footer` (`{ left, right }` plain text with `{page}` / `{total}`), `pagination` on/off. A missing key means the default (A4 portrait, 25.4 mm margins, no header or footer, pages on); malformed values fall back to defaults (`readPageSettings` in `src/shared/doc-schema.ts`) |
 | `comments` (`Y.Map`) | `threadId → Y.Map { quote, createdBy, createdAt, resolvedAt, resolvedBy, replies: Y.Array<{ id, authorId, body, createdAt, editedAt, deletedAt }> }` |
 
 Comment anchors are a `comment` mark with a `threadId` attribute (overlapping marks allowed). A thread whose anchor text was deleted is shown as "detached" in the comments panel rather than lost.
 
 ### 3.4 Migrations
 
-Both object classes run pending migrations in `ctx.blockConcurrencyWhile()` from their constructors, using the `schema_version` table and `migrate()` in `src/worker/db.ts` built in M0. Migrations are forward-only and additive so that `wrangler rollback` keeps working. The Yjs document structure is versioned separately with a `settings.schema` number; the client upgrades older documents on load.
+Both object classes run pending migrations in `ctx.blockConcurrencyWhile()` from their constructors, using the `schema_version` table and `migrate()` in `src/worker/db.ts` built in M0. Migrations are forward-only and additive so that `wrangler rollback` keeps working. The Yjs document structure is versioned separately: a `settings.schema` number will be introduced the first time a structure change needs an upgrade on load (none has yet — new settings use defaults when absent).
 
 ### 3.5 Storage and row budget
 
@@ -297,14 +307,14 @@ Added in v4: document socket authorisation through Workspace, the `document_sess
 | Framework | React 19 + TypeScript | Matches Tiptap's React bindings |
 | Build tool | Vite 8 + `@cloudflare/vite-plugin` | Runs the Worker and both Durable Object classes in workerd during `npm run dev` |
 | UI components | Tailwind CSS v4 + shadcn/ui (Radix, Nova preset) | Menus, dropdowns, popovers, dialogs, sheets and tooltips for a Docs-style shell |
-| Editor | Tiptap 3 (MIT): StarterKit (links limited to http/https/mailto/tel; Tiptap's own undo/redo disabled), Collaboration, CollaborationCaret, TextStyleKit (font family, size, colour), Highlight (multicolour), TextAlign, TaskList/TaskItem, TableKit (resizable), Subscript/Superscript, Placeholder, plus Colo's Indent and DocsFormatting extensions. Image arrives in M6 | Headless, so the UI is ours; most widely used Yjs binding; all listed extensions are MIT |
-| Real pages | `tiptap-pagination-plus` + `tiptap-table-plus` (MIT) | Decoration-only pagination that is safe with Yjs; tables split across pages (spike, ADR 0003). Fork or vendor if they stall |
+| Editor | Tiptap 3 (MIT): StarterKit (links limited to http/https/mailto/tel; Tiptap's own undo/redo disabled), Collaboration, CollaborationCaret, TextStyleKit (font family, size, colour), Highlight (multicolour), TextAlign, TaskList/TaskItem, TableKit (resizable, with Colo's `PagedTableView`), Subscript/Superscript, Placeholder, plus Colo's Indent, DocsFormatting, PageBreak and Pagination extensions. Image arrives in M6 | Headless, so the UI is ours; most widely used Yjs binding; all listed extensions are MIT |
+| Real pages | Colo's own engine, `src/client/editor/pages/` ([ADR 0004](decisions/0004-own-pagination-engine.md)) | Decoration-only, so safe with Yjs; margin bands are floats placed from computed page geometry; table rows are separate grids so tables split between rows |
 | Collaboration client | `yjs` + `y-partyserver/provider` | Reconnect, resync and awareness handled by the library |
 | Comments | Our code: `comment` mark + `Y.Map` threads + margin cards | Tiptap Comments is paid |
 | DOCX | `mammoth` (import), `docx` (export), JSZip (page settings) | Open source, browser-side |
 | Auth | `@simplewebauthn/browser` | Passkey prompts |
 | Fonts | Self-hosted via `@fontsource` (OFL): Arimo (shown as Arial), Carlito (Calibri), Caladea (Cambria), Cousine (Courier New), Tinos (Times New Roman); Geist for the UI | No font CDN (CSP, privacy); metric-compatible, so DOCX layout stays close |
-| Tests | Vitest 4.1 + `@cloudflare/vitest-plugin`; puppeteer-core with the local Chrome for editor smoke tests | Real Durable Objects and SQLite in tests; headless checks of pagination and sync |
+| Tests | Vitest 4.1 + `@cloudflare/vitest-plugin`; puppeteer-core with the local Chrome for two-browser tests (`e2e/`) | Real Durable Objects and SQLite in tests; headless checks of pagination, print and sync |
 
 ### 6.2 Layout (Google Docs–style, Colo branding)
 
@@ -321,7 +331,7 @@ Added in v4: document socket authorisation through Workspace, the `document_sess
 
 ```
 /*
-  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'
   X-Content-Type-Options: nosniff
   Referrer-Policy: same-origin
   Permissions-Policy: camera=(), microphone=(), geolocation=()
@@ -333,8 +343,9 @@ Added in v4: document socket authorisation through Workspace, the `document_sess
   Cache-Control: public, max-age=31536000, immutable
 ```
 
-- **`style-src 'unsafe-inline'` is required** because rich-text marks (colour, font, size) and table column widths render inline styles, and `tiptap-pagination-plus` and Radix insert `<style>` elements (verified in the spike). Applied in M3 (`7347c63`). `script-src` stays `'self'`, which also blocks inline event handlers. Tiptap's own injected CSS is disabled (`injectCSS: false`) and shipped as a stylesheet. M2 ran under the strict policy; M3 relaxed `style-src` when formatting arrived.
-- **Header/footer text is plain text**, escaped before it reaches pagination-plus (which renders HTML), so a document cannot inject markup through page settings.
+- **`style-src 'unsafe-inline'` is required** because rich-text marks (colour, font, size), table column widths and page geometry render inline styles, and Radix and the print `@page` rule use `<style>` elements. Applied in M3 (`7347c63`). `script-src` stays `'self'`, which also blocks inline event handlers. Tiptap's own injected CSS is disabled (`injectCSS: false`) and shipped as a stylesheet. M2 ran under the strict policy; M3 relaxed `style-src` when formatting arrived.
+- **Header/footer text is plain text**, rendered with `textContent`, so a document cannot inject markup through page settings.
+- No `worker-src` directive: nothing uses web workers yet (`default-src 'self'` covers same-origin ones). Add `worker-src 'self' blob:` only when a feature needs blob workers.
 - `_headers` does not apply to Worker responses, so the Worker adds the same headers to `/api` responses (except `101` upgrades), plus `Cache-Control: no-store` unless the object sets one.
 
 ---
@@ -361,8 +372,9 @@ colo/
       components/ui/        # shadcn/ui components
       home/                 # document list, import
       doc/                  # document shell: top bar, menus, toolbar, outline, comments panel
-      editor/               # Tiptap setup, extensions (comment mark, image, page settings), pagination
-      collab/               # provider setup, hidden-tab disconnect, save status
+      editor/               # Tiptap setup, extensions (comment mark, image), toolbar
+        pages/              # pagination engine, page break node, paged table view (M4)
+      collab/               # provider, hidden-tab disconnect, save status, page settings
       docx/                 # import (mammoth) and export (docx)
       lib/utils.ts
     worker/
@@ -371,7 +383,7 @@ colo/
       auth.ts               # invites, passkeys, sessions
       documents.ts          # document index, authorisation, revocation fan-out
       document.ts           # Document Durable Object (y-partyserver YServer)
-      storage.ts            # chunked state, images, restore points
+      storage.ts            # chunked state, pending metadata; later images, restore points
       db.ts                 # migrations
     shared/
       protocol.ts           # HTTP types, control events, limits
@@ -379,7 +391,7 @@ colo/
   scripts/
     invite.ts
   e2e/                      # browser tests (puppeteer-core + Chrome virtual passkeys)
-    auth.ts, collab.ts, formatting.ts, gate.ts
+    browser.ts (shared helpers), auth.ts, collab.ts, formatting.ts, pages.ts, gate.ts
   test/
   docs/
     colo-plan.md
@@ -484,7 +496,7 @@ Assumptions: both people actively type for 3 hours each (about 3 edits per secon
 | Worker requests | 100,000/day; 10 ms CPU | ~1,000–2,000 (page loads, auth, images, socket upgrades) | ~2% |
 | Durable Object requests | 100,000/day; incoming WebSocket messages count 20:1; outgoing are free | ~64,800 edits + ~64,800 cursor updates + ~11,500 awareness renewals ≈ 141,000 messages → **~7,100**; plus ~1,000 HTTP/RPC calls | ~8% |
 | Durable Object duration | 13,000 GB-s/day; hibernation-eligible idle objects are not billed | Objects active ~6 h in total at 128 MB ≈ **2,800 GB-s** | ~22% |
-| SQLite rows written | 100,000/day; deletes and `setAlarm()` count | Saves every 2–10 s while editing ≈ 2,200–10,800; auto restore points, metadata pushes, sessions ≈ 1,500 → **≤ 12,500** | ≤ 13% |
+| SQLite rows written | 100,000/day; deletes and `setAlarm()` count | Saves every 2–10 s while editing ≈ 2,200–10,800; deferred metadata (alarm, `pending_meta` write and delete, ≈ 3 per minute of editing) ≈ 1,100; auto restore points, metadata pushes, sessions ≈ 1,500 → **≤ 13,500** | ≤ 14% |
 | SQLite rows read | 5,000,000/day | State reloads after hibernation (~2 rows each), lists, auth → **< 100,000** | < 2% |
 | SQLite storage | 5 GB account; 10 GB per object | Text documents: MBs. Images ≤ 1 MB each. Restore points capped at 50 per document | Low |
 | Workers Logs | 200,000 events/day | A few thousand (WebSocket messages are not request logs) | Low |
@@ -497,7 +509,7 @@ Assumptions: both people actively type for 3 hours each (about 3 edits per secon
 2. **Debounced whole-state saves:** 2 s after the last edit, at most 10 s apart; one row per save for documents under 1.9 MB.
 3. **Hidden-tab disconnect:** 5 minutes after a tab becomes hidden; reconnect when visible.
 4. **Per-connection caps:** 1 MB messages, 30 messages/s sustained with bursts of 600, 25 MB document state (§4.3).
-5. **Throttled metadata:** at most one Workspace update per document per minute for ordinary edits (a pending update is flushed by an alarm); title changes are sent immediately.
+5. **Throttled metadata:** at most one Workspace update per document per minute for ordinary edits (a pending update is kept in `pending_meta` and flushed by an alarm); title changes are sent immediately.
 6. **Bounded restore points:** automatic at most every 30 minutes of activity; keep the newest 50 per document.
 7. **Images:** compressed in the browser, 1 MB maximum, served with long private caching.
 8. **Monitoring:** check Workers and Durable Objects metrics weekly during M2–M4 and monthly afterwards; investigate anything above 50% of a daily limit. Optional client-side cursor throttling if awareness traffic turns out higher than estimated.
@@ -519,7 +531,7 @@ Assumptions: both people actively type for 3 hours each (about 3 edits per secon
 - **Members are fully trusted.** A member (or a buggy client) can alter any document, comment authorship or cursor names. Mitigated by restore points and the small, known membership.
 - **Server cannot validate document structure** cheaply; a corrupt update affects everyone. Mitigated by restore points and the `pre-restore` safety copy.
 - **Inline styles are allowed.** CSS injection is limited because document content never becomes raw HTML outside the editor schema.
-- **Single-maintainer pagination packages.** Pin versions, review updates, and vendor if needed.
+- **The pagination engine is ours** (ADR 0004). Covered by unit tests of the geometry and the two-browser `e2e:pages` test, including print.
 
 ---
 
@@ -531,7 +543,7 @@ Assumptions: both people actively type for 3 hours each (about 3 edits per secon
 | **M1 — Passkey auth** ✅ built | SimpleWebAuthn-in-workerd spike (runs without `nodejs_compat`); auth tables; invite, register, login, logout; `scripts/invite.ts`; sign-in and invite screens | Tests with a software authenticator ✅; browser test with Chrome virtual passkeys ✅; deployed ✅; **both users enrolled — pending** | Commit `02fccee` |
 | **M2 — Collaboration core** ✅ built | `documents` table and list API; Document object on `y-partyserver` with hibernation, chunked saves, caps; Worker auth handoff and revocation; minimal Tiptap editor with collaboration and cursors; document list, create, rename, delete; hidden-tab disconnect | Local: 44 workerd tests ✅, two-browser co-editing test on the production build under the strict CSP ✅. **Deployed gate ✅ passed 15 Sep 2026 on `colo-staging`** (`npm run e2e:gate`): co-editing; eviction and reload while sockets stay open (`document-load` logs, no events while idle); 238 tokens typed through a redeploy all arrived and persisted. Still to watch: Durable Objects duration in the dashboard during real use | Commits `a38b90f`, `38ae967` |
 | **M3 — Document UI** ✅ built, ✅ deployed | Docs-style shell (title bar, File/Edit/View/Insert/Format menus, toolbar), formatting set (F5), outline, zoom, fonts, save status, mobile layout, CSP change | `npm run e2e:formatting` ✅: every toolbar and menu action reaches the second browser, identical content, no CSP violations, 390px layout without horizontal scroll. Deployed to production 15 Sep 2026 along with logo/favicon/banner branding. **Still pending:** a check on a real phone | Commits `1f5618a`…`bea380f`, `a074fba`, `1327653`, `c1fa431` |
-| **M4 — Real pages** | Pagination with A4/Letter, margins, headers/footers, page numbers including "Page X of Y", table splitting, page breaks, page setup dialog, print stylesheet | 50-page document with tables stays responsive (< 16 ms layout per keystroke on a laptop); printed PDF matches on-screen pages; remote edits reflow correctly | 2–3 days |
+| **M4 — Real pages** ✅ built | Pagination with A4/Letter, margins, headers/footers, page numbers including "Page X of Y", table splitting, page breaks, page setup dialog, print stylesheet | `npm run e2e:pages` ✅ on the production build: 52-page document with tables, no line or row inside a margin band, tables split between rows; keystroke + layout median 4–5 ms, p95 7–9 ms; printed PDF has one sheet per page (sheets checked visually against the screen); a page break reflows the other browser exactly; Letter and pageless modes. **Still pending:** deploy, and checks on a real phone and printer | Commits `6eed551`, `5b432ec` |
 | **M5 — Comments** | Comment mark, thread storage, margin cards, replies, resolve/reopen, detached threads | Comments sync live, survive edits to anchored text, restore with restore points | 2–3 days |
 | **M6 — Images and restore points** | Upload, paste, resize and alignment of images; automatic and named restore points; restore with `pre-restore` copy | Image-heavy document stays under limits; restoring a point updates both browsers | 2 days |
 | **M7 — DOCX** | Import (content, tables, images, page size, margins) and export (content, tables, images, page settings, headers/footers, page numbers, comments) | Round-trip test documents open correctly in Word and LibreOffice; known losses documented | 2–3 days |
@@ -554,7 +566,7 @@ Assumptions: both people actively type for 3 hours each (about 3 edits per secon
 | D7 | Per-document sharing or roles | Deferred; all members edit all documents |
 | D8 | Trash / restore deleted documents UI | Deferred; soft-deleted rows remain and appear in `/api/export` |
 | D9 | Staging environment | Deferred; a second Worker would get its own objects and data |
-| D10 | Word-faithful layout | Deferred. If M4 cannot meet its checks, re-evaluate SuperDoc (AGPL-3.0, ~2.7 MB gzip engine, telemetry must be disabled) per ADR 0003 |
+| D10 | Word-faithful layout | Deferred. M4 met its checks with Colo's own engine (ADR 0004); SuperDoc (AGPL-3.0, ~2.7 MB gzip engine, telemetry must be disabled) stays the fallback if Word fidelity becomes a requirement |
 
 ---
 
@@ -587,7 +599,7 @@ Figures confirmed against Cloudflare documentation in September 2026.
 - [R2 pricing](https://developers.cloudflare.com/r2/pricing/) and [community report on the R2 payment-method requirement](https://community.cloudflare.com/t/if-i-want-to-use-cloudflare-r2-i-have-to-link-a-payment-method-i-suggest-not-doin/887578)
 - [PartyKit / y-partyserver](https://github.com/cloudflare/partykit/tree/main/packages/y-partyserver)
 - [Tiptap pricing](https://tiptap.dev/pricing) and [Tiptap open-sourcing formerly Pro extensions](https://tiptap.dev/blog/release-notes/were-open-sourcing-more-of-tiptap)
-- [tiptap-pagination-plus](https://github.com/RomikMakavana/tiptap-pagination-plus)
+- [tiptap-pagination-plus](https://github.com/RomikMakavana/tiptap-pagination-plus) (studied, not used — ADR 0004)
 - [CKEditor 5 licensing](https://ckeditor.com/docs/ckeditor5/latest/getting-started/licensing/license-and-legal.html)
 - [Plate Yjs](https://platejs.org/docs/yjs), [Plate comments](https://platejs.org/docs/comment), [Plate pagination discussion](https://github.com/udecode/plate/discussions/4380)
 - [BlockNote comments](https://www.blocknotejs.org/docs/features/collaboration/comments) and [DOCX export licensing](https://www.blocknotejs.org/docs/features/export/docx)
