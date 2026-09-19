@@ -1,6 +1,6 @@
 # Colo — Build & Deployment Plan
 
-**Status:** Draft v4.9
+**Status:** Draft v4.10
 **Date:** 19 September 2026
 **Owner:** SWC
 **Platform:** Cloudflare Workers (Free plan)
@@ -27,6 +27,7 @@
 | v4.7 | 19 Sep 2026 | **M4 built** (commits `3ecb61a`, `a931937`). `tiptap-pagination-plus` and `tiptap-table-plus` were not adopted after reading their source — table-plus rewrites whole tables in both browsers and drops cell selection; pagination-plus renders header text as HTML and has no `{total}` — so Colo has its own decoration-only pagination engine using the same float technique, with page geometry computed from the settings ([ADR 0004](decisions/0004-own-pagination-engine.md)). Tables keep Tiptap's schema; tables with vertically merged cells do not split. Default page is A4 with 1-inch margins. Headers and footers are one line of plain text per side |
 | v4.8 | 19 Sep 2026 | **M4 deployed to production.** Git history rewritten to remove `Co-Authored-By` trailers from three early commits (the project does not credit Claude in commits); only messages changed — every commit keeps its tree, author and dates — so all commit IDs changed and the IDs quoted in this plan and in ADR 0001 were updated. The old history is kept locally under the tag `pre-rewrite` |
 | v4.9 | 19 Sep 2026 | **M5 built** (commits `0d39e67`…`3db4226`), not yet deployed. Each comment is a `Y.Map` inside the thread's `comments` array (not a plain object), so edits, deletes and resolves merge field by field; names are stored with IDs (`createdByName`, `authorName`) because there is no member-list API. Anchoring marks are added and removed outside undo history, and pasted content drops them. Highlights come from a generated stylesheet of open threads, so resolving never touches the text. A comment being written keeps its range as Yjs relative positions. Margin cards need 272 px beside the page; without room (phones, narrow windows) comments live in a panel. Performance: a first version re-rendered every card on each keystroke (400–600 ms with 100 threads); now margin positions are read from the page once a frame and the cards are memoised — production build, 50-page document: 50 threads ≈ 15 ms, 100 threads ≈ 16 ms per keystroke including frame work (`npm run e2e:comments-perf`), 20 threads ≈ 2 ms. "Restore with restore points" moves to M6, which builds restore points |
+| v4.10 | 19 Sep 2026 | **M6 built** (commits `e758d4b`…`787ac29`), not yet deployed. **Images:** one SQLite row per image (≤ 1 MB fits under the 2 MB row limit), so the planned `image_chunks` table and width/height columns are dropped; 200 MB of images per document. The browser sends images that already fit (≤ 2048 px, ≤ 1 MB, allowed type) untouched, so screenshots stay sharp and GIFs keep their animation; others become WebP (JPEG where the browser cannot encode WebP). Our own node view instead of Tiptap's resizable one, which ignores remote size changes and never commits touch resizes. Alignment is the paragraph `textAlign` attribute. **Restore points:** `unstable_replaceDocument` only rewinds root types the snapshot already had and treats every root as a map, so a comments map created after a point survived a restore; `replaceState` (`src/worker/restore-points.ts`) uses the same UndoManager approach over the fixed `ROOT_TYPES`. An automatic point is the previously saved state, taken before a save at most every 30 minutes, and never of an empty document. `restore_points` gains `created_by_name`. Document routes for images and restore points are authorised by Workspace (`authorizeRequest`, no writes) and served by the Document object. Also fixed: a session extended on a route other than `/api/me` no longer leaves the browser's cookie behind; a late first `/api/me` no longer signs out a member who has just registered (the intermittent e2e sign-in failure); connection notices clear themselves |
 
 Earlier designs remain readable in git history.
 
@@ -140,9 +141,9 @@ Everything is served from one hostname, `colo.manan-vala.workers.dev`, so there 
 
 **Delete a document.** Workspace soft-deletes the row and calls `closeAll("deleted")` on the Document object; new connections are refused at authorisation.
 
-**Images.** The browser resizes (longest side ≤ 2048 px) and encodes WebP (≤ 1 MB), `POST`s it to `/api/docs/<id>/images`, and inserts an image node pointing at the returned URL. `GET` requests are served by the Document object with `Cache-Control: private, max-age=31536000, immutable`.
+**Images.** The browser resizes (longest side ≤ 2048 px) and encodes WebP (≤ 1 MB; JPEG where the browser cannot encode WebP; images that already fit are sent untouched), `POST`s it to `/api/docs/<id>/images`, and inserts an image node pointing at the returned URL where the image was added (kept as a Yjs relative position during the upload). The Worker asks Workspace to authorise the session (`authorizeRequest`, which writes nothing) and forwards the request to the Document object with the member's identity. `GET` requests are served by the Document object with `Cache-Control: private, max-age=31536000, immutable`.
 
-**Restore a point.** The object saves a `pre-restore` point of the current state, then replaces the live document with the snapshot using `y-partyserver`'s `unstable_replaceDocument` (applied as a normal change, so every client receives it).
+**Restore a point.** The object saves a `pre-restore` point of the current state, then rewinds the live document to the snapshot with `replaceState` (the approach of `y-partyserver`'s `unstable_replaceDocument`, extended to every root type in `ROOT_TYPES`). It is applied as a normal change, so every client receives it and nobody's undo can revert it. The object saves at once and broadcasts `restored` with who did it.
 
 **DOCX import.** The browser converts the file with `mammoth` to HTML, reads page size and margins from the DOCX with JSZip, creates a new document and sets its content and page settings.
 
@@ -192,39 +193,33 @@ CREATE TABLE pending_meta (                      -- a throttled document-list up
   updated_by    TEXT
 );
 
-CREATE TABLE restore_points (
-  id            TEXT PRIMARY KEY,
-  kind          TEXT NOT NULL CHECK (kind IN ('auto', 'named', 'pre-restore', 'import')),
-  label         TEXT,
-  created_at    TEXT NOT NULL,
-  created_by    TEXT,
-  state_bytes   INTEGER NOT NULL
-);
-CREATE TABLE restore_point_chunks (
-  point_id      TEXT NOT NULL REFERENCES restore_points(id),
-  seq           INTEGER NOT NULL,
-  data          BLOB NOT NULL,
-  PRIMARY KEY (point_id, seq)
-) WITHOUT ROWID;
-
-CREATE TABLE images (
-  id            TEXT PRIMARY KEY,
+CREATE TABLE images (                           -- one row per image: at most 1 MB, under the row limit
+  id            TEXT PRIMARY KEY,                -- ULID
   mime          TEXT NOT NULL CHECK (mime IN ('image/webp', 'image/png', 'image/jpeg', 'image/gif')),
   bytes         INTEGER NOT NULL,
-  width         INTEGER,
-  height        INTEGER,
+  data          BLOB NOT NULL,
   created_at    TEXT NOT NULL,
   created_by    TEXT NOT NULL
-);
-CREATE TABLE image_chunks (
-  image_id      TEXT NOT NULL REFERENCES images(id),
-  seq           INTEGER NOT NULL,
-  data          BLOB NOT NULL,
-  PRIMARY KEY (image_id, seq)
+) WITHOUT ROWID;
+
+CREATE TABLE restore_points (
+  id              TEXT PRIMARY KEY,              -- ULID
+  kind            TEXT NOT NULL CHECK (kind IN ('auto', 'named', 'pre-restore', 'import')),
+  label           TEXT,
+  created_at      TEXT NOT NULL,
+  created_by      TEXT,                          -- null for automatic points
+  created_by_name TEXT,                          -- the Document object has no member list
+  state_bytes     INTEGER NOT NULL
+) WITHOUT ROWID;
+CREATE TABLE restore_point_chunks (              -- the Yjs state, chunked like doc_state
+  point_id        TEXT NOT NULL REFERENCES restore_points(id),
+  seq             INTEGER NOT NULL,
+  data            BLOB NOT NULL,
+  PRIMARY KEY (point_id, seq)
 ) WITHOUT ROWID;
 ```
 
-`doc_state` ships in M2, `pending_meta` in v4.6; `restore_points` and `images` arrive in M6. A save upserts the state chunks and deletes chunks beyond the new count, all in one `transactionSync()`, so a save costs exactly one row for documents under 1.9 MB. The metadata throttle is in memory while the object is awake; `pending_meta` is written only when an update is deferred or its editor changes, and deleted once sent — about three rows per minute of editing. `WITHOUT ROWID` tables keep their primary key as the table itself, so chunk writes add no index rows.
+`doc_state` ships in M2, `pending_meta` in v4.6, `images` (migration 3) and `restore_points` (migration 4) in M6. An upload writes one row; a restore point one row plus one per 1.9 MB of state, and at most 50 are kept per document (automatic and pre-restore points are dropped before named ones). Images are never deleted, so undo and every restore point keep working. A save upserts the state chunks and deletes chunks beyond the new count, all in one `transactionSync()`, so a save costs exactly one row for documents under 1.9 MB. The metadata throttle is in memory while the object is awake; `pending_meta` is written only when an update is deferred or its editor changes, and deleted once sent — about three rows per minute of editing. `WITHOUT ROWID` tables keep their primary key as the table itself, so chunk writes add no index rows.
 
 ### 3.3 Inside the Yjs document
 
@@ -261,11 +256,11 @@ Text documents are tens to hundreds of kilobytes of Yjs state; images are capped
 | `PATCH /api/docs/:id` | Workspace → Document | Session | Rename from the list page (applied to `settings.title` in the Yjs document) |
 | `DELETE /api/docs/:id` | Workspace → Document | Session | Soft delete; closes open sockets |
 | `GET /api/docs/:id/ws` | Worker → Document | Session (checked by Workspace) | WebSocket upgrade |
-| `POST /api/docs/:id/images` | Document | Session | Upload one image (≤ 1 MB after compression) |
-| `GET /api/docs/:id/images/:imageId` | Document | Session | Image bytes |
-| `GET /api/docs/:id/restore-points` | Document | Session | List restore points |
-| `POST /api/docs/:id/restore-points` | Document | Session | Create a named restore point |
-| `POST /api/docs/:id/restore-points/:pointId/restore` | Document | Session | Restore (creates a `pre-restore` point first) |
+| `POST /api/docs/:id/images` | Worker → Document | Session (checked by Workspace) | Upload one image: raw body, `Content-Type` webp/png/jpeg/gif, ≤ 1 MB; `201 { id, url }` |
+| `GET /api/docs/:id/images/:imageId` | Worker → Document | Session (checked by Workspace) | Image bytes, `Cache-Control: private, max-age=31536000, immutable` |
+| `GET /api/docs/:id/restore-points` | Worker → Document | Session (checked by Workspace) | `{ points }`, newest first |
+| `POST /api/docs/:id/restore-points` | Worker → Document | Session (checked by Workspace) | Create a named restore point; body `{ label }` (1–100 characters) |
+| `POST /api/docs/:id/restore-points/:pointId/restore` | Worker → Document | Session (checked by Workspace) | Restore; saves a `pre-restore` point first; returns `{ restored, saved }` |
 | `GET /api/export` | Workspace → Documents | Session | Backup: members, document index and each document's Yjs state (base64) |
 
 Every `POST`, `PATCH`, `DELETE` and WebSocket upgrade must carry an `Origin` header equal to `ORIGIN`; anything else gets `403`. For document routes, the Worker strips any incoming `x-colo-member` header and sets it only after Workspace authorises the request. Durable Objects are not reachable from the internet except through the Worker.
@@ -547,7 +542,7 @@ Assumptions: both people actively type for 3 hours each (about 3 edits per secon
 | **M3 — Document UI** ✅ built, ✅ deployed | Docs-style shell (title bar, File/Edit/View/Insert/Format menus, toolbar), formatting set (F5), outline, zoom, fonts, save status, mobile layout, CSP change | `npm run e2e:formatting` ✅: every toolbar and menu action reaches the second browser, identical content, no CSP violations, 390px layout without horizontal scroll. Deployed to production 15 Sep 2026 along with logo/favicon/banner branding. **Still pending:** a check on a real phone | Commits `e61a77a`…`a038697`, `5af4efb`, `aba1f32`, `a483747` |
 | **M4 — Real pages** ✅ built, ✅ deployed | Pagination with A4/Letter, margins, headers/footers, page numbers including "Page X of Y", table splitting, page breaks, page setup dialog, print stylesheet | `npm run e2e:pages` ✅ on the production build: 52-page document with tables, no line or row inside a margin band, tables split between rows; keystroke + layout median 4–5 ms, p95 7–9 ms; printed PDF has one sheet per page (sheets checked visually against the screen); a page break reflows the other browser exactly; Letter and pageless modes. Deployed to production 19 Sep 2026. **Still pending:** checks on a real phone and a real printer | Commits `3ecb61a`, `a931937` |
 | **M5 — Comments** ✅ built | Comment mark, thread storage, margin cards, replies, resolve/reopen, detached threads | `npm run e2e:comments` ✅ on the production build: comments, replies, edits and deletes sync live; highlight and card aligned (0 px); overlapping threads; resolve/reopen; detached and re-attached on undo; undo of typing keeps comments; paste does not copy them; a draft survives the other person's edits; no highlights in print; phone panel. Unit tests for the model, anchors, margin layout and highlight CSS. "Restore with restore points" is checked in M6. **Still pending:** deploy | Commits `0d39e67`…`3db4226` |
-| **M6 — Images and restore points** | Upload, paste, resize and alignment of images; automatic and named restore points; restore with `pre-restore` copy | Image-heavy document stays under limits; restoring a point updates both browsers, including comments | 2 days |
+| **M6 — Images and restore points** ✅ built | Upload, paste, resize and alignment of images; automatic and named restore points; restore with `pre-restore` copy | `npm run e2e:images` ✅ and `npm run e2e:restore` ✅ on the production build: picked and pasted images reach the other browser; a 4000×3000 paste is stored as WebP, 0.97 MB, 2048×1536; resizing and centring sync; eight images add ~1.5 KB to the shared document and none crosses a page edge; pasted HTML keeps only Colo's images; images print. A restore brings back the text and its comment and removes the newer comment in both browsers, with a notice; Ctrl+Z does not revert it; the pre-restore copy restores the newer version. Unit tests: image API (types, signatures, limits, a 30-image document), `replaceState`, the restore API with two Yjs clients, automatic points and retention. **Known limits:** an image pasted from another document still points at that document; images are never deleted. **Still pending:** deploy | Commits `e758d4b`…`787ac29` |
 | **M7 — DOCX** | Import (content, tables, images, page size, margins) and export (content, tables, images, page settings, headers/footers, page numbers, comments) | Round-trip test documents open correctly in Word and LibreOffice; known losses documented | 2–3 days |
 | **M8 — Hardening** | `/api/export`; PITR check; security review; Workers Builds CI; metrics review; mobile pass | Backup restores to a local instance; CI deploys from `main` | 2 days |
 

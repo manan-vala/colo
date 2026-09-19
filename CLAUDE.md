@@ -15,9 +15,15 @@ M0–M4 are **built and deployed** to `colo.manan-vala.workers.dev`:
 
 **M5 — comments is built but not deployed** (run `npm run deploy` when ready). `src/client/comments/`: threads in the Yjs `comments` map (`model.ts`), a `comment` mark as the anchor (`comment-mark.ts`), highlights from a generated stylesheet (`highlight.ts`), margin cards placed from the page's own layout (`CommentRail.tsx`, `rail-layout.ts`), a panel for all threads and for narrow screens. `useComments` returns `{ state, actions }`; `state` must not change on ordinary typing and `actions` is stable — keep it that way, or every card re-renders per keystroke.
 
-**Next up: M6 — images and restore points.** See §11 of the plan for the full milestone table (M7 DOCX import/export, M8 hardening/CI).
+**M6 — images and restore points is built but not deployed.**
+- Images: `src/client/editor/images/` (extension, our own resizable node view, browser-side compression, upload with a tracked insertion point) and `src/worker/images.ts` (one SQLite row per image).
+- Restore points: `src/worker/restore-points.ts` (storage, automatic points, `replaceState`) and `src/client/doc/RestorePointsDialog.tsx`.
+- Image and restore-point routes are authorised by Workspace (`authorizeRequest`) and served by the Document object (`onMemberRequest`).
+- A new top-level Yjs type must be added to `ROOT_TYPES` in `doc-schema.ts`, or restores will not rewind it.
 
-**Not built yet** — don't assume these exist: DOCX export/import (M7, nothing in `docx`/`mammoth` is installed), images (M6), restore points (M6), `/api/export` backups (M8), Workers Builds CI (M8).
+**Next up: M7 — DOCX import/export.** See §11 of the plan for the full milestone table (M8 hardening/CI).
+
+**Not built yet** — don't assume these exist: DOCX export/import (M7, nothing in `docx`/`mammoth` is installed), `/api/export` backups (M8), Workers Builds CI (M8).
 
 ## Stack
 
@@ -31,7 +37,7 @@ npm test             # Vitest inside workerd (real Durable Objects/SQLite)
 npm run build        # tsc -b, then vite build
 npm run deploy       # build, then wrangler deploy
 npm run cf-typegen   # regenerate worker-configuration.d.ts after editing wrangler.jsonc
-npm run e2e:auth | e2e:collab | e2e:formatting | e2e:pages | e2e:comments   # puppeteer + Chrome virtual passkeys, two-browser tests (need a server on :5173)
+npm run e2e:auth | e2e:collab | e2e:formatting | e2e:pages | e2e:comments | e2e:images | e2e:restore   # puppeteer + Chrome virtual passkeys, two-browser tests (need a server on :5173)
 npm run e2e:comments-perf   # typing with many comment threads; run against `npm run build && npx vite preview --port 5173`
 COLO_URL=https://… npm run e2e:gate              # deployed-Worker gate (hibernation, reconnect through a redeploy)
 ```
@@ -52,8 +58,8 @@ COLO_URL=https://… npm run e2e:gate              # deployed-Worker gate (hiber
 ## Repo layout
 
 ```
-src/client/   React SPA — home/ (doc list), doc/ (editor shell, page setup, print styles), editor/ (Tiptap setup, toolbar, pages/ = pagination), collab/ (provider, page settings), auth/, assets/
-src/worker/   Worker router + both Durable Object classes (workspace.ts, document.ts) + storage.ts, auth.ts, documents.ts, db.ts
+src/client/   React SPA — home/ (doc list), doc/ (editor shell, page setup, restore points, print styles), editor/ (Tiptap setup, toolbar, pages/ = pagination, images/), comments/, collab/ (provider, page settings, tracked positions), auth/, assets/
+src/worker/   Worker router + both Durable Object classes (workspace.ts, document.ts) + storage.ts, images.ts, restore-points.ts, auth.ts, documents.ts, db.ts
 src/shared/   Shared by client and Worker: protocol.ts (API, limits), doc-schema.ts (Yjs structure, page settings)
 e2e/          Puppeteer two-browser + deployed-gate tests
 test/         Vitest unit/integration tests (run inside workerd)

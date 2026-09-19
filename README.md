@@ -42,6 +42,8 @@ npm run e2e:formatting   # every toolbar and menu action reaches the other brows
 npm run e2e:pages    # 50-page document, headers/footers, page breaks, print (M4); PDF_PATH=… saves the PDF
 npm run e2e:comments # two people comment, reply, resolve; detached threads; phone panel (M5)
 npm run e2e:comments-perf   # typing with many threads (run against the production build)
+npm run e2e:images   # upload, paste, resize, align; large images compressed; pages and print (M6)
+npm run e2e:restore  # named version, restore for both people with comments, restore the restore (M6)
 COLO_URL=https://… npm run e2e:gate   # M2 gate on a deployed Worker (hibernation, deploy mid-typing)
 ```
 
@@ -77,4 +79,6 @@ Colo runs at <https://colo.manan-vala.workers.dev>. **M1 (passkey sign-in), M2 (
 
 M4 added A4/Letter pages in portrait or landscape, margins, one-line headers and footers with `{page}` and `{total}` ("Page X of Y"), page breaks (Ctrl/⌘+Enter), tables that split between rows, File → Page setup, Insert → Page numbers, and printing one sheet per page. Narrow screens and pageless documents stay continuous.
 
-**M5 (comments) is built, not yet deployed:** select text and add a comment (toolbar, Insert → Comment or Ctrl/⌘+Alt+M); cards sit in the margin beside their text, with replies, editing, resolve and reopen; the Comments button lists open, text-deleted and resolved threads. On phones comments open in a panel. Next: M6, images and restore points.
+**M5 (comments) is built, not yet deployed:** select text and add a comment (toolbar, Insert → Comment or Ctrl/⌘+Alt+M); cards sit in the margin beside their text, with replies, editing, resolve and reopen; the Comments button lists open, text-deleted and resolved threads. On phones comments open in a panel.
+
+**M6 (images and restore points) is built, not yet deployed:** add images from Insert → Image, the toolbar, paste or drag and drop; they are compressed in the browser (at most 2048 px and 1 MB) and stored with the document; drag a corner to resize, use the alignment buttons to place them. File → Restore points lists automatic versions (kept before each stretch of editing) and named ones; restoring changes the document for both people, comments included, and keeps the version it replaced. Next: M7, DOCX import and export.
