@@ -5,9 +5,15 @@ import { SETTINGS_KEYS, SETTINGS_MAP } from "../shared/doc-schema";
 import { CLOSE_CODES, LIMITS, type ControlEvent } from "../shared/protocol";
 import { DOCUMENT_MIGRATIONS, migrate } from "./db";
 import { IDENTITY_HEADER, INTERNAL_HOST, decodeIdentity, type DocumentIdentity } from "./documents";
+import {
+  clearPendingMeta,
+  readPendingMeta,
+  readState,
+  writePendingMeta,
+  writeState,
+  type PendingMeta,
+} from "./storage";
 
-/** SQLite rows are limited to 2 MB; keep a margin. */
-export const STATE_CHUNK_BYTES = 1_900_000;
 const META_PUSH_INTERVAL = 60_000;
 
 export interface ConnectionState {
@@ -36,10 +42,15 @@ export class Document extends YServer<Env> {
   static callbackOptions = { debounceWait: 2000, debounceMaxWait: 10_000 };
 
   private readOnly = false;
-  private lastEditor: string | null = null;
+
+  // Document-list metadata not yet sent to Workspace. In memory while the object is awake; a
+  // deferred update is also written to `pending_meta`, so eviction before the alarm loses nothing.
   private metaDirty = false;
   private titleChanged = false;
+  private lastEditor: string | null = null;
+  private lastEditAt: string | null = null;
   private lastMetaPush = 0;
+  private persistedMeta: PendingMeta | null = null;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -51,20 +62,26 @@ export class Document extends YServer<Env> {
   // ---- persistence -----------------------------------------------------------
 
   async onLoad(): Promise<void> {
-    const chunks = this.ctx.storage.sql
-      .exec<{ data: ArrayBuffer }>("SELECT data FROM doc_state ORDER BY seq")
-      .toArray()
-      .map((row) => new Uint8Array(row.data));
-    const bytes = chunks.reduce((n, c) => n + c.byteLength, 0);
-    if (chunks.length > 0) {
-      Y.applyUpdate(this.document, chunks.length === 1 ? chunks[0] : concat(chunks));
-      this.readOnly = bytes > LIMITS.docStateBytes;
+    const { sql } = this.ctx.storage;
+    const state = readState(sql);
+    if (state) {
+      Y.applyUpdate(this.document, state);
+      this.readOnly = state.byteLength > LIMITS.docStateBytes;
+    }
+    const pending = readPendingMeta(sql);
+    if (pending) {
+      this.metaDirty = true;
+      this.lastEditor = pending.updatedBy;
+      this.lastEditAt = pending.updatedAt;
+      this.persistedMeta = pending;
     }
     // One line per cold start or wake from hibernation; used to verify hibernation (plan §9.2).
-    console.log(JSON.stringify({ event: "document-load", doc: this.name, bytes, chunks: chunks.length }));
+    console.log(JSON.stringify({ event: "document-load", doc: this.name, bytes: state?.byteLength ?? 0 }));
+
     this.document.on("update", (_update: Uint8Array, origin: unknown) => {
       const identity = (origin as Connection<ConnectionState> | null)?.state?.identity;
       if (identity) this.lastEditor = identity.memberId;
+      this.lastEditAt = new Date().toISOString();
       this.metaDirty = true;
     });
     this.document.getMap(SETTINGS_MAP).observe((event) => {
@@ -74,19 +91,7 @@ export class Document extends YServer<Env> {
 
   async onSave(): Promise<void> {
     const state = Y.encodeStateAsUpdate(this.document);
-    const count = Math.max(1, Math.ceil(state.byteLength / STATE_CHUNK_BYTES));
-    const { sql } = this.ctx.storage;
-    this.ctx.storage.transactionSync(() => {
-      for (let seq = 0; seq < count; seq++) {
-        const chunk = state.slice(seq * STATE_CHUNK_BYTES, (seq + 1) * STATE_CHUNK_BYTES);
-        sql.exec(
-          "INSERT INTO doc_state (seq, data) VALUES (?, ?) ON CONFLICT (seq) DO UPDATE SET data = excluded.data",
-          seq,
-          chunk.buffer,
-        );
-      }
-      sql.exec("DELETE FROM doc_state WHERE seq >= ?", count);
-    });
+    writeState(this.ctx.storage, state);
 
     const tooLarge = state.byteLength > LIMITS.docStateBytes;
     if (tooLarge && !this.readOnly) this.broadcastControl({ type: "limit", code: "DOCUMENT_TOO_LARGE" });
@@ -107,9 +112,7 @@ export class Document extends YServer<Env> {
     if (!this.metaDirty) return;
     const now = Date.now();
     if (!this.titleChanged && now - this.lastMetaPush < META_PUSH_INTERVAL) {
-      if ((await this.ctx.storage.getAlarm()) === null) {
-        await this.ctx.storage.setAlarm(this.lastMetaPush + META_PUSH_INTERVAL);
-      }
+      await this.deferMeta(this.lastMetaPush + META_PUSH_INTERVAL);
       return;
     }
     this.metaDirty = false;
@@ -119,13 +122,32 @@ export class Document extends YServer<Env> {
     try {
       await this.env.WORKSPACE.getByName("default").updateDocumentMeta(this.name, {
         title: typeof title === "string" && title.trim() ? title : null,
-        updatedAt: new Date(now).toISOString(),
+        updatedAt: this.lastEditAt ?? new Date(now).toISOString(),
         updatedBy: this.lastEditor,
       });
+      if (this.persistedMeta) {
+        clearPendingMeta(this.ctx.storage.sql);
+        this.persistedMeta = null;
+      }
     } catch (error) {
       this.metaDirty = true;
       console.error("metadata push failed", error);
+      await this.deferMeta(now + META_PUSH_INTERVAL);
     }
+  }
+
+  /**
+   * Schedules the alarm that sends a throttled update and records the update in SQLite. The row
+   * is rewritten only when the editor changes, so a minute of typing costs about three rows
+   * (this write, the alarm and the delete after sending) rather than one per save.
+   */
+  private async deferMeta(at: number): Promise<void> {
+    const meta: PendingMeta = { updatedAt: this.lastEditAt ?? new Date().toISOString(), updatedBy: this.lastEditor };
+    if (!this.persistedMeta || this.persistedMeta.updatedBy !== meta.updatedBy) {
+      writePendingMeta(this.ctx.storage.sql, meta);
+      this.persistedMeta = meta;
+    }
+    if ((await this.ctx.storage.getAlarm()) === null) await this.ctx.storage.setAlarm(at);
   }
 
   async onAlarm(): Promise<void> {
@@ -218,14 +240,4 @@ export class Document extends YServer<Env> {
   private broadcastControl(event: ControlEvent) {
     this.broadcastCustomMessage(JSON.stringify(event));
   }
-}
-
-function concat(chunks: Uint8Array[]): Uint8Array {
-  const out = new Uint8Array(chunks.reduce((n, c) => n + c.byteLength, 0));
-  let offset = 0;
-  for (const chunk of chunks) {
-    out.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return out;
 }

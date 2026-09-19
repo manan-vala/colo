@@ -112,6 +112,9 @@ export class Documents {
     const id = ulid();
     const now = isoNow();
     const normalized = normalizeTitle(title, DEFAULT_TITLE);
+    // Seed the title into the Yjs document first: if that fails, no index row points at a
+    // document that never got its title.
+    await this.internal(id, "title", { title: normalized });
     this.sql.exec(
       "INSERT INTO documents (id, title, created_at, created_by, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, ?)",
       id,
@@ -121,14 +124,14 @@ export class Documents {
       now,
       member.id,
     );
-    // Seed the title into the Yjs document so the editor and the list agree from the start.
-    await this.internal(id, "title", { title: normalized });
     return this.get(id);
   }
 
   async rename(member: Member, id: string, title: unknown): Promise<DocumentSummary> {
     const normalized = normalizeTitle(title);
     this.get(id);
+    // The Yjs document is the source of truth for titles; update it before the index.
+    await this.internal(id, "title", { title: normalized });
     this.sql.exec(
       "UPDATE documents SET title = ?, updated_at = ?, updated_by = ? WHERE id = ? AND deleted_at IS NULL",
       normalized,
@@ -136,7 +139,6 @@ export class Documents {
       member.id,
       id,
     );
-    await this.internal(id, "title", { title: normalized });
     return this.get(id);
   }
 
@@ -191,6 +193,11 @@ export class Documents {
       )
       .toArray();
     await Promise.all(docs.map((row) => this.internal(row.doc_id, "close-session", { sessionHash })));
+  }
+
+  /** Forgets documents opened by sessions that no longer exist (expired or deleted). */
+  pruneSessions(): void {
+    this.sql.exec("DELETE FROM document_sessions WHERE session_hash NOT IN (SELECT id_hash FROM sessions)");
   }
 
   private async internal(id: string, action: string, body: unknown): Promise<void> {

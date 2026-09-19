@@ -70,6 +70,7 @@ export class Workspace extends DurableObject<Env> {
 
       case "POST /api/auth/register/verify": {
         const { member, cookie } = await this.auth.verifyRegistration(await readJson<RegisterVerifyRequest>(request));
+        this.documents.pruneSessions();
         return json({ member } satisfies MeResponse, { headers: { "Set-Cookie": cookie } });
       }
 
@@ -78,6 +79,7 @@ export class Workspace extends DurableObject<Env> {
 
       case "POST /api/auth/login/verify": {
         const { member, cookie } = await this.auth.verifyLogin(await readJson<LoginVerifyRequest>(request));
+        this.documents.pruneSessions();
         return json({ member } satisfies MeResponse, { headers: { "Set-Cookie": cookie } });
       }
 

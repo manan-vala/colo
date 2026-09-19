@@ -1,10 +1,11 @@
-import { env, runInDurableObject } from "cloudflare:test";
+import { abortAllDurableObjects, env, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { SETTINGS_KEYS, SETTINGS_MAP } from "../src/shared/doc-schema";
 import { CLOSE_CODES, LIMITS, type DocumentSummary, type ListDocumentsResponse } from "../src/shared/protocol";
-import { STATE_CHUNK_BYTES, takeToken, type ConnectionState, type Document } from "../src/worker/document";
-import { call, enroll } from "./helpers/api";
+import { takeToken, type ConnectionState, type Document } from "../src/worker/document";
+import { STATE_CHUNK_BYTES } from "../src/worker/storage";
+import { call, enroll, signIn } from "./helpers/api";
 import { connect, eventually, openSocket, syncStep1Message } from "./helpers/yclient";
 
 async function createDoc(cookie: string, title?: string): Promise<DocumentSummary> {
@@ -196,6 +197,43 @@ describe("collaboration", () => {
     client.close();
   });
 
+  it("delivers a throttled metadata update even if the object is evicted before its alarm", async () => {
+    const alice = await enroll(undefined, "Alice");
+    const bob = await enroll(undefined, "Bob");
+    const doc = await createDoc(alice.cookie, "Evicted");
+    const stub = documentStub(doc.id);
+    const a = await connect(doc.id, alice.cookie);
+    const b = await connect(doc.id, bob.cookie);
+    await Promise.all([a.synced, b.synced]);
+
+    a.doc.getText("body").insert(0, "a");
+    await runInDurableObject(stub, async (instance) => {
+      await eventually(() => expect(instance.document.getText("body").toString()).toBe("a"));
+      await instance.onSave();
+    });
+    b.doc.getText("body").insert(1, "b");
+    await runInDurableObject(stub, async (instance, state) => {
+      await eventually(() => expect(instance.document.getText("body").toString()).toBe("ab"));
+      await instance.onSave();
+      expect(await state.storage.getAlarm()).not.toBeNull();
+    });
+    const summary = () => call(`/api/docs/${doc.id}`, { cookie: alice.cookie }).then((r) => r.json<DocumentSummary>());
+    expect((await summary()).updatedBy.id).toBe(alice.memberId);
+
+    // In-memory state is lost here, as when Cloudflare evicts a hibernated object. (The test's
+    // own socket requests would keep the object from draining, so close them first.)
+    a.close();
+    b.close();
+    await abortAllDurableObjects().catch(() => undefined);
+    const fresh = documentStub(doc.id);
+    expect(await runDurableObjectAlarm(fresh)).toBe(true);
+
+    expect((await summary()).updatedBy.id).toBe(bob.memberId);
+    await runInDurableObject(fresh, async (_instance, state) => {
+      expect(state.storage.sql.exec("SELECT * FROM pending_meta").toArray()).toHaveLength(0);
+    });
+  });
+
   it("applies renames from the document list to open documents", async () => {
     const { cookie } = await enroll();
     const doc = await createDoc(cookie, "Old");
@@ -225,6 +263,26 @@ describe("revocation", () => {
       await eventually(() => expect(instance.document.getText("t").toString()).toBe("still here"));
     });
     stayer.close();
+  });
+
+  it("forgets which documents an expired session opened at the next sign-in", async () => {
+    const a = await enroll();
+    const doc = await createDoc(a.cookie);
+    const client = await connect(doc.id, a.cookie);
+    await client.synced;
+    client.close();
+
+    const workspace = env.WORKSPACE.getByName("default");
+    const openedBy = () =>
+      runInDurableObject(workspace, (_instance, state) =>
+        state.storage.sql.exec("SELECT * FROM document_sessions WHERE doc_id = ?", doc.id).toArray().length,
+      );
+    expect(await openedBy()).toBe(1);
+    await runInDurableObject(workspace, (_instance, state) => {
+      state.storage.sql.exec("UPDATE sessions SET expires_at = ? WHERE member_id = ?", "2000-01-01T00:00:00.000Z", a.memberId);
+    });
+    expect((await signIn(a.authenticator)).status).toBe(200);
+    expect(await openedBy()).toBe(0);
   });
 
   it("closes every socket when the document is deleted", async () => {

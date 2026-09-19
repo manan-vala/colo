@@ -87,6 +87,16 @@ export const DOCUMENT_MIGRATIONS: Migration[] = [
       );
     `);
   },
+  // 2: a throttled document-list update that must survive eviction until its alarm fires
+  (sql) => {
+    sql.exec(`
+      CREATE TABLE pending_meta (
+        id            INTEGER PRIMARY KEY CHECK (id = 1),
+        updated_at    TEXT NOT NULL,
+        updated_by    TEXT
+      );
+    `);
+  },
 ];
 
 export function readSchemaVersion(sql: SqlStorage): number {
