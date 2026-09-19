@@ -92,21 +92,20 @@ function lineText(doc: Document): string {
 
 function splitLeftRight(doc: Document, notes: NoteList): HeaderFooterText {
   const paragraphs = children(doc.documentElement, NS.w, "p");
-  const line = lineText(doc);
-  const parts = line
-    .split("\t")
-    .map((part) => part.replace(/\s+/g, " ").trim())
-    .filter(Boolean);
-  if (paragraphs.length > 1 && paragraphs.filter((p) => paragraphText(p).trim()).length > 1) {
+  if (paragraphs.filter((p) => paragraphText(p).trim()).length > 1) {
     notes.add("converted", "Headers and footers with several lines were joined into one line");
   }
+  // Tab stops place the parts: text before the first tab is on the left, after the last on the
+  // right; anything between (centred text) has no place in Colo's two-part header.
+  const parts = lineText(doc)
+    .split("\t")
+    .map((part) => part.replace(/\s+/g, " ").trim());
   const clip = (text: string) => text.slice(0, HEADER_FOOTER_MAX_LENGTH);
-  if (parts.length === 0) return { left: "", right: "" };
   if (parts.length === 1) {
     const right = paragraphs.some((p) => val(child(p, NS.w, "pPr"), "jc") === "right");
     return right ? { left: "", right: clip(parts[0]) } : { left: clip(parts[0]), right: "" };
   }
-  if (parts.length > 2) notes.add("dropped", "Centred header and footer text was not kept (Colo has left and right parts)");
+  if (parts.slice(1, -1).some(Boolean)) notes.add("dropped", "Centred header and footer text was not kept (Colo has left and right parts)");
   return { left: clip(parts[0]), right: clip(parts[parts.length - 1]) };
 }
 

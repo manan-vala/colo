@@ -1,6 +1,6 @@
 import type { JSONContent } from "@tiptap/core";
 import { isSafeLink } from "../../editor/links";
-import { DEFAULT_FONT, DEFAULT_FONT_SIZE } from "../../editor/font-list";
+import { textLook, type TextLook } from "../defaults";
 import type { NoteList } from "../model";
 import { groupBlocks, type Block, type ListKind } from "./blocks";
 import type { Drawings } from "./drawings";
@@ -123,7 +123,7 @@ export class BodyReader {
     };
 
     if (props.pageBreakBefore) out.push({ node: { type: "pageBreak" } });
-    this.inline(p, part, styleId, {
+    this.inline(p, part, styleId, textLook(heading, group === "quote"), {
       text: (node) => inline.push(node),
       pageBreak: () => {
         flush();
@@ -194,7 +194,8 @@ export class BodyReader {
 
   // ---- runs --------------------------------------------------------------------------------
 
-  private inline(container: Element, part: string, styleId: string | null, sink: InlineSink) {
+  /** Walks a paragraph's runs; `look` is the formatting Colo shows anyway (left unmarked). */
+  private inline(container: Element, part: string, styleId: string | null, look: TextLook, sink: InlineSink) {
     const fields: Field[] = [];
     const links: (string | null)[] = [];
 
@@ -204,7 +205,7 @@ export class BodyReader {
       const link = links.findLast((l) => l !== null) ?? fields.findLast((f) => f.link)?.link ?? null;
       const threads = [...this.activeThreads];
       for (const thread of threads) this.quotes.set(thread, (this.quotes.get(thread) ?? "") + text);
-      sink.text({ type: "text", text, marks: this.marks({ ...props, ...extra }, link, threads) });
+      sink.text({ type: "text", text, marks: this.marks({ ...props, ...extra }, look, link, threads) });
     };
 
     const run = (r: Element) => {
@@ -374,7 +375,7 @@ export class BodyReader {
     return left <= 0;
   }
 
-  private marks(props: RunProps, link: string | null, threads: string[]): JSONContent["marks"] {
+  private marks(props: RunProps, look: TextLook, link: string | null, threads: string[]): JSONContent["marks"] {
     const marks: NonNullable<JSONContent["marks"]> = [];
     if (props.bold) marks.push({ type: "bold" });
     if (props.italic) marks.push({ type: "italic" });
@@ -385,10 +386,10 @@ export class BodyReader {
     const style: Record<string, string> = {};
     if (props.font) {
       const family = officeFontToCss(props.font, genericFor(this.ctx.fontClass(props.font)));
-      if (family !== DEFAULT_FONT.family) style.fontFamily = family;
+      if (family !== officeFontToCss(look.font)) style.fontFamily = family;
     }
-    if (props.size && props.size !== DEFAULT_FONT_SIZE) style.fontSize = `${props.size}pt`;
-    if (props.color && props.color !== "#000000" && !link) style.color = props.color;
+    if (props.size && props.size !== look.size) style.fontSize = `${props.size}pt`;
+    if (props.color && props.color !== look.color && !link) style.color = props.color;
     if (Object.keys(style).length) marks.push({ type: "textStyle", attrs: style });
     if (props.highlight) marks.push({ type: "highlight", attrs: { color: props.highlight } });
     if (link) marks.push({ type: "link", attrs: { href: link } });
