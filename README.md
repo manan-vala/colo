@@ -17,6 +17,7 @@ Runs entirely on the **Cloudflare Workers Free plan** at $0/month, using only op
 - [ADR 0002 — Passkey sign-in on workers.dev](docs/decisions/0002-passkey-auth-on-workers-dev.md)
 - [ADR 0003 — Collaborative document engine: Tiptap + Yjs on per-document Durable Objects](docs/decisions/0003-collaborative-document-engine.md)
 - [ADR 0004 — Our own pagination engine instead of tiptap-pagination-plus](docs/decisions/0004-own-pagination-engine.md)
+- [ADR 0005 — Our own DOCX reader instead of mammoth; docx for export](docs/decisions/0005-own-docx-reader.md)
 
 ## Development
 
@@ -44,6 +45,7 @@ npm run e2e:comments # two people comment, reply, resolve; detached threads; pho
 npm run e2e:comments-perf   # typing with many threads (run against the production build)
 npm run e2e:images   # upload, paste, resize, align; large images compressed; pages and print (M6)
 npm run e2e:restore  # named version, restore for both people with comments, restore the restore (M6)
+npm run e2e:convert  # import a Word file, download every format, open the Word export in Word (M7)
 COLO_URL=https://… npm run e2e:gate   # M2 gate on a deployed Worker (hibernation, deploy mid-typing)
 ```
 
@@ -65,10 +67,10 @@ colo/
   components.json         # shadcn/ui config
   public/_headers         # security and cache headers for static assets
   src/
-    client/               # React SPA (components/ui = shadcn/ui; editor/pages = pagination; editor/images; comments)
+    client/               # React SPA (components/ui = shadcn/ui; editor/pages = pagination; editor/images; comments; convert = import/export)
     worker/               # Worker router + Workspace and Document Durable Objects
     shared/               # types shared by client and Worker
-  scripts/                # admin scripts (M1)
+  scripts/                # admin scripts (M1); Word COM scripts for DOCX fixtures and checks (M7)
   e2e/                    # two-browser tests (puppeteer + Chrome virtual passkeys)
   test/                   # Vitest inside workerd
   docs/
@@ -76,10 +78,12 @@ colo/
 
 ## Status
 
-Colo runs at <https://colo.manan-vala.workers.dev>. **M1 (passkey sign-in), M2 (collaborative documents), M3 (Google Docs-style editor UI) and M4 (real pages) are built and deployed** — menus, toolbar, fonts, colours, links, lists, tables, outline, zoom, plus branding (logo, favicon, home-screen banner).
+Colo runs at <https://colo.manan-vala.workers.dev>. **M1 (passkey sign-in), M2 (collaborative documents), M3 (Google Docs-style editor UI), M4 (real pages), M5 (comments) and M6 (images and restore points) are built and deployed** — menus, toolbar, fonts, colours, links, lists, tables, outline, zoom, plus branding (logo, favicon, home-screen banner).
 
 M4 added A4/Letter pages in portrait or landscape, margins, one-line headers and footers with `{page}` and `{total}` ("Page X of Y"), page breaks (Ctrl/⌘+Enter), tables that split between rows, File → Page setup, Insert → Page numbers, and printing one sheet per page. Narrow screens and pageless documents stay continuous.
 
-**M5 (comments) is built, not yet deployed:** select text and add a comment (toolbar, Insert → Comment or Ctrl/⌘+Alt+M); cards sit in the margin beside their text, with replies, editing, resolve and reopen; the Comments button lists open, text-deleted and resolved threads. On phones comments open in a panel.
+**M5 (comments):** select text and add a comment (toolbar, Insert → Comment or Ctrl/⌘+Alt+M); cards sit in the margin beside their text, with replies, editing, resolve and reopen; the Comments button lists open, text-deleted and resolved threads. On phones comments open in a panel.
 
-**M6 (images and restore points) is built, not yet deployed:** add images from Insert → Image, the toolbar, paste or drag and drop; they are compressed in the browser (at most 2048 px and 1 MB) and stored with the document; drag a corner to resize, use the alignment buttons to place them. File → Restore points lists automatic versions (kept before each stretch of editing) and named ones; restoring changes the document for both people, comments included, and keeps the version it replaced. Next: M7, DOCX import and export.
+**M6 (images and restore points):** add images from Insert → Image, the toolbar, paste or drag and drop; they are compressed in the browser (at most 2048 px and 1 MB) and stored with the document; drag a corner to resize, use the alignment buttons to place them. File → Restore points lists automatic versions (kept before each stretch of editing) and named ones; restoring changes the document for both people, comments included, and keeps the version it replaced.
+
+**M7 (import and export) is built, not yet deployed:** Import file on the list page or File → Open file brings in Word (.docx), Markdown, web page or text files as new documents (File → Replace with file swaps a document's content, keeping the old version as a restore point). Word files keep their fonts, colours, sizes, alignment, lists, tables with merged cells, images, links, page setup, header and footer page numbers, and comments with replies; an import report lists anything converted or left out. File → Download saves Word, PDF, web page, Markdown or plain text. Next: M8, hardening.

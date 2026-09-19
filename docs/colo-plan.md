@@ -1,6 +1,6 @@
 # Colo — Build & Deployment Plan
 
-**Status:** Draft v4.11
+**Status:** Draft v4.12
 **Date:** 19 September 2026
 **Owner:** SWC
 **Platform:** Cloudflare Workers (Free plan)
@@ -29,6 +29,7 @@
 | v4.9 | 19 Sep 2026 | **M5 built** (commits `0d39e67`…`3db4226`), not yet deployed. Each comment is a `Y.Map` inside the thread's `comments` array (not a plain object), so edits, deletes and resolves merge field by field; names are stored with IDs (`createdByName`, `authorName`) because there is no member-list API. Anchoring marks are added and removed outside undo history, and pasted content drops them. Highlights come from a generated stylesheet of open threads, so resolving never touches the text. A comment being written keeps its range as Yjs relative positions. Margin cards need 272 px beside the page; without room (phones, narrow windows) comments live in a panel. Performance: a first version re-rendered every card on each keystroke (400–600 ms with 100 threads); now margin positions are read from the page once a frame and the cards are memoised — production build, 50-page document: 50 threads ≈ 15 ms, 100 threads ≈ 16 ms per keystroke including frame work (`npm run e2e:comments-perf`), 20 threads ≈ 2 ms. "Restore with restore points" moves to M6, which builds restore points |
 | v4.10 | 19 Sep 2026 | **M6 built** (commits `e758d4b`…`787ac29`), not yet deployed. **Images:** one SQLite row per image (≤ 1 MB fits under the 2 MB row limit), so the planned `image_chunks` table and width/height columns are dropped; 200 MB of images per document. The browser sends images that already fit (≤ 2048 px, ≤ 1 MB, allowed type) untouched, so screenshots stay sharp and GIFs keep their animation; others become WebP (JPEG where the browser cannot encode WebP). Our own node view instead of Tiptap's resizable one, which ignores remote size changes and never commits touch resizes. Alignment is the paragraph `textAlign` attribute. **Restore points:** `unstable_replaceDocument` only rewinds root types the snapshot already had and treats every root as a map, so a comments map created after a point survived a restore; `replaceState` (`src/worker/restore-points.ts`) uses the same UndoManager approach over the fixed `ROOT_TYPES`. An automatic point is the previously saved state, taken before a save at most every 30 minutes, and never of an empty document. `restore_points` gains `created_by_name`. Document routes for images and restore points are authorised by Workspace (`authorizeRequest`, no writes) and served by the Document object. Also fixed: a session extended on a route other than `/api/me` no longer leaves the browser's cookie behind; a late first `/api/me` no longer signs out a member who has just registered (the intermittent e2e sign-in failure); connection notices clear themselves |
 | v4.11 | 19 Sep 2026 | **M6 review** (commits `696ee16`, `318a737`). Ctrl+Alt+M on a selected image no longer starts a comment that could never be anchored (the `comment` mark only applies to text). IDs are now monotonic ULIDs: ones made in the same millisecond used to sort randomly, which made "newest first" and "drop the oldest" unreliable for restore points saved close together. Pruning always keeps the point just saved, so a pre-restore copy survives even when 50 named points exist. Docs brought up to date: stack, repository layout, image nodes in §3.3, image limits in §4.3 and §10 |
+| v4.12 | 20 Sep 2026 | **M5 and M6 deployed. M7 built** (commits `ca0b81a`…`70e4ccc`), not yet deployed. Import and export, going beyond DOCX to what Google Docs offers within Colo's limits: open Word, Markdown, web page and text files; download Word, PDF (print), web page, Markdown and text. **Our own DOCX reader instead of `mammoth`** ([ADR 0005](decisions/0005-own-docx-reader.md)): mammoth drops fonts, colours, sizes, alignment, headers, footers and page setup by design. The reader (fflate + DOMParser) resolves Word's style inheritance and reads lists, merged table cells, images, links, fields, page setup, header/footer page numbers and comment threads with replies and resolved state; tracked changes are accepted, footnotes become a Notes list, and an import report lists every conversion and loss. `docx` writes exports with Colo's look as Word styles, and the reader leaves formatting equal to that look unmarked, so a document round-trips unchanged. Converters load on first use (a separate ~140 KB gzipped chunk). File → Replace with file saves an `import` restore point first. Also fixed: headings are limited to the four levels the editor offers (pasted h5/h6 showed as unstyled "Normal text") |
 
 Earlier designs remain readable in git history.
 
@@ -53,7 +54,7 @@ Everything runs on Cloudflare's Workers Free plan with no payment method attache
 | F7 | Comments | Threads on selected text, replies, resolve and reopen, comments margin |
 | F8 | Images | Upload or paste; compressed in the browser and stored with the document |
 | F9 | Restore points | Automatic and named snapshots of a document; restore any of them |
-| F10 | DOCX import and export | Open a `.docx` as a new document; download any document as `.docx` |
+| F10 | Import and export | Open a Word (.docx), Markdown, web page or text file as a new document, or replace a document with one; download any document as Word, PDF, web page, Markdown or text. An import report lists what was converted or left out |
 | F11 | Outline | Heading-based navigation panel |
 | F12 | Save status | "Saving…", "All changes saved", "Offline — changes will sync" |
 | F13 | Mobile browser | Continuous (unpaged) layout and a compact toolbar on narrow screens |
@@ -116,7 +117,7 @@ Everything is served from one hostname, `colo.manan-vala.workers.dev`, so there 
 
 **Comments inside the Yjs document.** Thread data lives in a `Y.Map` next to the content, anchored by a `comment` mark on the text. Comments therefore sync, persist, travel with edited text and appear in restore points with no extra protocol.
 
-**Browser-side DOCX conversion.** Import and export run in the browser with open-source libraries, so they cost no Worker CPU and need no server-side document model.
+**Browser-side conversion.** Import and export run in the browser with open-source libraries, so they cost no Worker CPU and need no server-side document model. The converters load only when someone imports or downloads ([ADR 0005](decisions/0005-own-docx-reader.md)).
 
 **Why not D1 or R2.** Durable Objects already carry SQLite, so D1 would add a second service without benefit. R2 has a free tier but requires adding a payment method to the account, which would end the $0 hard cap; images are small enough to store in the Document object's SQLite (§3.2).
 
@@ -146,9 +147,18 @@ Everything is served from one hostname, `colo.manan-vala.workers.dev`, so there 
 
 **Restore a point.** The object saves a `pre-restore` point of the current state, then rewinds the live document to the snapshot with `replaceState` (the approach of `y-partyserver`'s `unstable_replaceDocument`, extended to every root type in `ROOT_TYPES`). It is applied as a normal change, so every client receives it and nobody's undo can revert it. The object saves at once and broadcasts `restored` with who did it.
 
-**DOCX import.** The browser converts the file with `mammoth` to HTML, reads page size and margins from the DOCX with JSZip, creates a new document and sets its content and page settings.
+**Import.**
+1. The browser reads the file with Colo's own DOCX reader (fflate and DOMParser; ADR 0005), or with `marked` and the editor schema for Markdown, the editor schema for HTML, or one paragraph per line for text.
+2. It creates the document with the file's title and uploads its images to it.
+3. The document screen applies the content outside undo history, then page setup, title and comment threads, and shows the import report.
 
-**DOCX export.** The browser serialises the editor's JSON with `docx`, including page size, margins, header/footer text, page-number fields, images, tables and comments, and downloads the file.
+"Replace with file" first saves an `import` restore point.
+
+**Export.** The browser serialises the editor's JSON, fetches the document's images (WebP becomes PNG for Word) and downloads the file:
+- **Word:** written with `docx`, including page setup, header/footer text with page-number fields, images, tables and comment threads.
+- **Web page:** standalone, with the images embedded.
+- **Markdown** and **text**.
+- **PDF:** printing, which already draws one sheet per page.
 
 ---
 
@@ -262,7 +272,7 @@ Text documents are tens to hundreds of kilobytes of Yjs state; images are capped
 | `POST /api/docs/:id/images` | Worker → Document | Session (checked by Workspace) | Upload one image: raw body, `Content-Type` webp/png/jpeg/gif, ≤ 1 MB; `201 { id, url }` |
 | `GET /api/docs/:id/images/:imageId` | Worker → Document | Session (checked by Workspace) | Image bytes, `Cache-Control: private, max-age=31536000, immutable` |
 | `GET /api/docs/:id/restore-points` | Worker → Document | Session (checked by Workspace) | `{ points }`, newest first |
-| `POST /api/docs/:id/restore-points` | Worker → Document | Session (checked by Workspace) | Create a named restore point; body `{ label }` (1–100 characters) |
+| `POST /api/docs/:id/restore-points` | Worker → Document | Session (checked by Workspace) | Create a restore point; body `{ label, kind? }` (1–100 characters; `kind` is `named` by default, or `import` before a file replaces the document) |
 | `POST /api/docs/:id/restore-points/:pointId/restore` | Worker → Document | Session (checked by Workspace) | Restore; saves a `pre-restore` point first; returns `{ restored, saved }` |
 | `GET /api/export` | Workspace → Documents | Session | Backup: members, document index and each document's Yjs state (base64) |
 
@@ -313,16 +323,16 @@ Added in v4: document socket authorisation through Workspace, the `document_sess
 | Comments | Our code, `src/client/comments/`: `comment` mark + `Y.Map` threads + margin cards and a comments panel | Tiptap Comments is paid |
 | Images | Our code, `src/client/editor/images/`: canvas compression in the browser, upload, a resizable node view | Tiptap's resizable image view ignores the other person's size changes and never commits touch resizes |
 | Restore points | Our code, `src/worker/restore-points.ts` and `src/client/doc/RestorePointsDialog.tsx` | Tiptap's version history is paid |
-| DOCX | `mammoth` (import), `docx` (export), JSZip (page settings) | Open source, browser-side |
+| Import and export | Our DOCX reader on `fflate` + DOMParser; `docx` (export); `marked` (Markdown import); our Markdown, HTML and text writers — `src/client/convert/` ([ADR 0005](decisions/0005-own-docx-reader.md)) | Open source, browser-side, loaded on first use; mammoth drops most visual formatting |
 | Auth | `@simplewebauthn/browser` | Passkey prompts |
 | Fonts | Self-hosted via `@fontsource` (OFL): Arimo (shown as Arial), Carlito (Calibri), Caladea (Cambria), Cousine (Courier New), Tinos (Times New Roman); Geist for the UI | No font CDN (CSP, privacy); metric-compatible, so DOCX layout stays close |
 | Tests | Vitest 4.1 + `@cloudflare/vitest-plugin`; puppeteer-core with the local Chrome for two-browser tests (`e2e/`) | Real Durable Objects and SQLite in tests; headless checks of pagination, print and sync |
 
 ### 6.2 Layout (Google Docs–style, Colo branding)
 
-- **Home:** document list (title, last edited by and when), title filter, "Blank document", "Import .docx".
+- **Home:** document list (title, last edited by and when), title filter, "New document", "Import file".
 - **Document top bar:** home link, editable title, save status, avatars of people in the document, comments toggle.
-- **Menu bar:** File (new, import DOCX, download DOCX, print / save as PDF, page setup, restore points), Edit (undo, redo), Insert (image, table, link, page break, horizontal line, comment), Format (text styles, alignment, lists, clear formatting).
+- **Menu bar:** File (new, open file, replace with file, download as Word / PDF / web page / Markdown / text, restore points, page setup, print), Edit (undo, redo), Insert (image, table, link, page break, horizontal line, comment), Format (text styles, alignment, lists, clear formatting).
 - **Toolbar:** undo, redo, print, zoom, style (Normal/Title/Headings), font, size, bold, italic, underline, strikethrough, text colour, highlight, link, comment, image, alignment, check/bulleted/numbered lists, indent, clear formatting.
 - **Canvas:** grey background with white A4/Letter pages, headers, footers and page numbers; outline panel on the left; comment cards aligned to their anchors on the right.
 - **Narrow screens:** pagination off (continuous page), compact toolbar in a bottom sheet, comments in a sheet.
@@ -372,14 +382,15 @@ colo/
     client/
       main.tsx, App.tsx, auth.ts
       components/ui/        # shadcn/ui components
-      home/                 # document list, import
+      home/                 # document list, import file
       doc/                  # document shell: top bar, menus, outline, page setup, restore points, print styles
       editor/               # Tiptap setup, extensions, toolbar
         pages/              # pagination engine, page break node, paged table view (M4)
         images/             # image extension, resizable node view, compression, upload (M6)
       comments/             # thread model, comment mark, margin cards, comments panel (M5)
       collab/               # provider, hidden-tab disconnect, save status, page settings, tracked positions
-      docx/                 # import (mammoth) and export (docx)
+      convert/              # import and export (loaded on first use): docx/ reader and writer,
+                            # markdown.ts, html.ts, text.ts, apply.ts (put an import into a document)
       lib/utils.ts
     worker/
       index.ts              # router + auth handoff
@@ -398,8 +409,8 @@ colo/
     invite.ts
   e2e/                      # browser tests (puppeteer-core + Chrome virtual passkeys)
     browser.ts (shared helpers), auth.ts, collab.ts, formatting.ts, pages.ts, comments.ts,
-    comments-perf.ts, images.ts, restore-points.ts, gate.ts
-  test/
+    comments-perf.ts, images.ts, restore-points.ts, convert.ts, gate.ts
+  test/                     # Vitest in workerd; convert/ has its own tsconfig (DOM types) and Word fixtures
   docs/
     colo-plan.md
     decisions/
@@ -528,7 +539,7 @@ Assumptions: both people actively type for 3 hours each (about 3 edits per secon
 - **Sign-in and sessions:** as in v3 — invite-only passkeys, hashed revocable sessions, `SameSite=Strict`, `Origin` checks on state changes and upgrades, admin secret removed after enrolment.
 - **Document access:** every document route is authorised by Workspace; Durable Objects are only reachable through the Worker; the Worker controls the identity header.
 - **Revocation:** logout and member disabling close document sockets across all Document objects.
-- **Browser:** CSP with `script-src 'self'` and `frame-ancestors 'none'`; `style-src` allows inline styles (§6.3). Pasted and imported HTML is parsed through the editor schema, which drops unknown elements and attributes. Header/footer text is escaped. SVG images are rejected, and pasted content keeps only Colo's own images.
+- **Browser:** CSP with `script-src 'self'` and `frame-ancestors 'none'`; `style-src` allows inline styles (§6.3). Pasted and imported HTML is parsed in an inert document through the editor schema, which drops unknown elements and attributes; imported files never load anything from other sites. DOCX files are limited to 50 MB and 200 MB unzipped, checked before inflating (zip bombs). Header/footer text is escaped. SVG images are rejected, and pasted content keeps only Colo's own images.
 - **Abuse limits:** message, rate and document size caps per connection.
 - **Data:** encrypted at rest by Cloudflare; restore points per document; `/api/export` backups.
 
@@ -539,6 +550,7 @@ Assumptions: both people actively type for 3 hours each (about 3 edits per secon
 - **Server cannot validate document structure** cheaply; a corrupt update affects everyone. Mitigated by restore points and the `pre-restore` safety copy.
 - **Inline styles are allowed.** CSS injection is limited because document content never becomes raw HTML outside the editor schema.
 - **The pagination engine is ours** (ADR 0004). Covered by unit tests of the geometry and the two-browser `e2e:pages` test, including print.
+- **The DOCX reader is ours** (ADR 0005). Covered by a Word-made fixture, a write-then-read round trip of every supported feature, and `e2e:convert`, which opens an export in Word.
 
 ---
 
@@ -551,9 +563,9 @@ Assumptions: both people actively type for 3 hours each (about 3 edits per secon
 | **M2 — Collaboration core** ✅ built | `documents` table and list API; Document object on `y-partyserver` with hibernation, chunked saves, caps; Worker auth handoff and revocation; minimal Tiptap editor with collaboration and cursors; document list, create, rename, delete; hidden-tab disconnect | Local: 44 workerd tests ✅, two-browser co-editing test on the production build under the strict CSP ✅. **Deployed gate ✅ passed 15 Sep 2026 on `colo-staging`** (`npm run e2e:gate`): co-editing; eviction and reload while sockets stay open (`document-load` logs, no events while idle); 238 tokens typed through a redeploy all arrived and persisted. Still to watch: Durable Objects duration in the dashboard during real use | Commits `8562858`, `ddd0ae0` |
 | **M3 — Document UI** ✅ built, ✅ deployed | Docs-style shell (title bar, File/Edit/View/Insert/Format menus, toolbar), formatting set (F5), outline, zoom, fonts, save status, mobile layout, CSP change | `npm run e2e:formatting` ✅: every toolbar and menu action reaches the second browser, identical content, no CSP violations, 390px layout without horizontal scroll. Deployed to production 15 Sep 2026 along with logo/favicon/banner branding. **Still pending:** a check on a real phone | Commits `e61a77a`…`a038697`, `5af4efb`, `aba1f32`, `a483747` |
 | **M4 — Real pages** ✅ built, ✅ deployed | Pagination with A4/Letter, margins, headers/footers, page numbers including "Page X of Y", table splitting, page breaks, page setup dialog, print stylesheet | `npm run e2e:pages` ✅ on the production build: 52-page document with tables, no line or row inside a margin band, tables split between rows; keystroke + layout median 4–5 ms, p95 7–9 ms; printed PDF has one sheet per page (sheets checked visually against the screen); a page break reflows the other browser exactly; Letter and pageless modes. Deployed to production 19 Sep 2026. **Still pending:** checks on a real phone and a real printer | Commits `3ecb61a`, `a931937` |
-| **M5 — Comments** ✅ built | Comment mark, thread storage, margin cards, replies, resolve/reopen, detached threads | `npm run e2e:comments` ✅ on the production build: comments, replies, edits and deletes sync live; highlight and card aligned (0 px); overlapping threads; resolve/reopen; detached and re-attached on undo; undo of typing keeps comments; paste does not copy them; a draft survives the other person's edits; no highlights in print; phone panel. Unit tests for the model, anchors, margin layout and highlight CSS. "Restore with restore points" is checked in M6. **Still pending:** deploy | Commits `0d39e67`…`3db4226` |
-| **M6 — Images and restore points** ✅ built | Upload, paste, resize and alignment of images; automatic and named restore points; restore with `pre-restore` copy | `npm run e2e:images` ✅ and `npm run e2e:restore` ✅ on the production build: picked and pasted images reach the other browser; a 4000×3000 paste is stored as WebP, 0.97 MB, 2048×1536; resizing and centring sync; eight images add ~1.5 KB to the shared document and none crosses a page edge; pasted HTML keeps only Colo's images; images print. A restore brings back the text and its comment and removes the newer comment in both browsers, with a notice; Ctrl+Z does not revert it; the pre-restore copy restores the newer version. Unit tests: image API (types, signatures, limits, a 30-image document), `replaceState`, the restore API with two Yjs clients, automatic points, retention and ID order. **Known limits:** an image pasted from another document still points at that document; images are never deleted. **Still pending:** deploy | Commits `e758d4b`…`787ac29`, review fixes `696ee16`, `318a737` |
-| **M7 — DOCX** | Import (content, tables, images, page size, margins) and export (content, tables, images, page settings, headers/footers, page numbers, comments) | Round-trip test documents open correctly in Word and LibreOffice; known losses documented | 2–3 days |
+| **M5 — Comments** ✅ built, ✅ deployed | Comment mark, thread storage, margin cards, replies, resolve/reopen, detached threads | `npm run e2e:comments` ✅ on the production build: comments, replies, edits and deletes sync live; highlight and card aligned (0 px); overlapping threads; resolve/reopen; detached and re-attached on undo; undo of typing keeps comments; paste does not copy them; a draft survives the other person's edits; no highlights in print; phone panel. Unit tests for the model, anchors, margin layout and highlight CSS. "Restore with restore points" is checked in M6. Deployed 19–20 Sep 2026 | Commits `0d39e67`…`3db4226` |
+| **M6 — Images and restore points** ✅ built, ✅ deployed | Upload, paste, resize and alignment of images; automatic and named restore points; restore with `pre-restore` copy | `npm run e2e:images` ✅ and `npm run e2e:restore` ✅ on the production build: picked and pasted images reach the other browser; a 4000×3000 paste is stored as WebP, 0.97 MB, 2048×1536; resizing and centring sync; eight images add ~1.5 KB to the shared document and none crosses a page edge; pasted HTML keeps only Colo's images; images print. A restore brings back the text and its comment and removes the newer comment in both browsers, with a notice; Ctrl+Z does not revert it; the pre-restore copy restores the newer version. Unit tests: image API (types, signatures, limits, a 30-image document), `replaceState`, the restore API with two Yjs clients, automatic points, retention and ID order. **Known limits:** an image pasted from another document still points at that document; images are never deleted. Deployed 19–20 Sep 2026 | Commits `e758d4b`…`787ac29`, review fixes `696ee16`, `318a737` |
+| **M7 — Import and export** ✅ built | Import (content, tables, images, page size, margins) and export (content, tables, images, page settings, headers/footers, page numbers, comments); beyond the plan: Markdown, web page and text both ways, PDF via print, replace with file, import report | `npm run e2e:convert` ✅ on the production build: a Word-made file imports with headings, merged cells, image, comment thread with reply, title, Letter landscape and header page numbers in both browsers; its Word export imports back to identical text and opens in Word (checked through COM: table, picture, 3 comments with a reply and a resolved one, header, footer, page setup); Markdown, web page and text downloads; replace with file keeps a restore point. Unit tests: 15 reader tests on the Word fixture and edge cases (field links, unsafe links, equations, EMF, charts, list counting, zip bomb, damaged files), a round trip of every supported feature, Markdown and text. **Known losses** (listed in the import report): line and paragraph spacing, columns, equations, charts and SmartArt, embedded objects, EMF/WMF/TIFF images, first-page/even headers, centred header text; footnotes become a Notes list; tracked changes are accepted; floating images and text boxes go in line. LibreOffice not checked automatically. **Still pending:** deploy | Commits `ca0b81a`…`70e4ccc` |
 | **M8 — Hardening** | `/api/export`; PITR check; security review; Workers Builds CI; metrics review; mobile pass | Backup restores to a local instance; CI deploys from `main` | 2 days |
 
 **Total:** about 17–24 working days after M0.
@@ -611,5 +623,6 @@ Figures confirmed against Cloudflare documentation in September 2026.
 - [Plate Yjs](https://platejs.org/docs/yjs), [Plate comments](https://platejs.org/docs/comment), [Plate pagination discussion](https://github.com/udecode/plate/discussions/4380)
 - [BlockNote comments](https://www.blocknotejs.org/docs/features/collaboration/comments) and [DOCX export licensing](https://www.blocknotejs.org/docs/features/export/docx)
 - [SuperDoc](https://github.com/superdoc-dev/superdoc)
+- [docx](https://github.com/dolanmiu/docx), [fflate](https://github.com/101arrowz/fflate), [marked](https://github.com/markedjs/marked), [mammoth](https://github.com/mwilliamson/mammoth.js) (studied, not used — ADR 0005)
 - [eigenpal docx-js-editor](https://github.com/eigenpal/docx-js-editor)
 - [SimpleWebAuthn server](https://simplewebauthn.dev/docs/packages/server)
