@@ -147,6 +147,8 @@ export interface ListRestorePointsResponse {
 /** `POST /api/docs/:id/restore-points` */
 export interface CreateRestorePointRequest {
   label: string;
+  /** "import": saved before a file replaces the document. Named by default. */
+  kind?: "named" | "import";
 }
 /** `POST /api/docs/:id/restore-points/:pointId/restore` */
 export interface RestoreResponse {

@@ -1,10 +1,12 @@
-import { FileText, LoaderCircle, LogOut, Pencil, Plus, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { FileText, FileUp, LoaderCircle, LogOut, Pencil, Plus, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { LIMITS, type DocumentSummary, type ListDocumentsResponse, type Member } from "../../shared/protocol";
 import { Button } from "@/components/ui/button";
 import logo from "../assets/logo.svg";
 import { banner } from "./banner";
 import { ApiRequestError, api } from "../api";
+import { IMPORT_ACCEPT } from "../convert/formats";
+import { describeImportError, importAsNewDocument } from "../doc/imports";
 import { timeAgo } from "../lib/time";
 import { navigate } from "../router";
 
@@ -13,6 +15,8 @@ export function Home({ member, onSignOut, onSessionEnded }: { member: Member; on
   const [filter, setFilter] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const fileInput = useRef<HTMLInputElement>(null);
 
   const handleError = useCallback(
     (err: unknown) => {
@@ -42,6 +46,19 @@ export function Home({ member, onSignOut, onSessionEnded }: { member: Member; on
     } catch (err) {
       handleError(err);
       setCreating(false);
+    }
+  };
+
+  // Word, Markdown, web page or text file → a new document with its content.
+  const importFile = async (file: File) => {
+    setImporting(true);
+    setError(null);
+    try {
+      navigate(`/d/${await importAsNewDocument(file)}`);
+    } catch (err) {
+      if (err instanceof ApiRequestError && err.status === 401) onSessionEnded();
+      else setError(describeImportError(err));
+      setImporting(false);
     }
   };
 
@@ -78,6 +95,22 @@ export function Home({ member, onSignOut, onSessionEnded }: { member: Member; on
             onChange={(event) => setFilter(event.target.value)}
             className="h-8 w-44 rounded-md border bg-background px-2.5 text-sm outline-none focus:border-ring"
           />
+          <input
+            ref={fileInput}
+            type="file"
+            accept={IMPORT_ACCEPT}
+            hidden
+            aria-label="Choose a file to import"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              event.target.value = "";
+              if (file) void importFile(file);
+            }}
+          />
+          <Button variant="outline" onClick={() => fileInput.current?.click()} disabled={importing} title="Word, Markdown, web page or text file">
+            {importing ? <LoaderCircle className="animate-spin" data-icon="inline-start" /> : <FileUp data-icon="inline-start" />}
+            {importing ? "Importing…" : "Import file"}
+          </Button>
           <Button onClick={create} disabled={creating}>
             {creating ? <LoaderCircle className="animate-spin" data-icon="inline-start" /> : <Plus data-icon="inline-start" />}
             New document

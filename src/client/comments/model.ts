@@ -124,6 +124,51 @@ export function deleteThread(doc: Y.Doc, threadId: string): void {
   threadsMap(doc).delete(threadId);
 }
 
+/** A thread from an imported file: its authors and dates come from the file. */
+export interface ThreadImport {
+  /** Must match the `threadId` of the comment marks in the imported content. */
+  id: string;
+  quote: string;
+  resolved: boolean;
+  comments: { author: Author; date: string | null; body: string }[];
+}
+
+/** Adds imported threads in one transaction; comments without text are skipped. */
+export function importThreads(doc: Y.Doc, threads: ThreadImport[]): void {
+  const now = new Date().toISOString();
+  doc.transact(() => {
+    for (const thread of threads) {
+      const comments = thread.comments.flatMap((comment) => {
+        const body = cleanBody(comment.body);
+        return body ? [commentMap(comment.author, body, comment.date ?? now)] : [];
+      });
+      if (!comments.length) continue;
+      const first = thread.comments[0];
+      const last = thread.comments[thread.comments.length - 1];
+      const fields: ThreadFields = {
+        quote: cleanQuote(thread.quote),
+        createdAt: first.date ?? now,
+        createdBy: first.author.id,
+        createdByName: first.author.name,
+        resolvedAt: thread.resolved ? (last.date ?? now) : null,
+        resolvedBy: thread.resolved ? last.author.id : null,
+        resolvedByName: thread.resolved ? last.author.name : null,
+      };
+      const map = new Y.Map<unknown>(Object.entries(fields));
+      map.set("comments", Y.Array.from(comments));
+      threadsMap(doc).set(thread.id, map);
+    }
+  });
+}
+
+/** Removes every thread (replacing a document's content with an imported file). */
+export function clearThreads(doc: Y.Doc): void {
+  const threads = threadsMap(doc);
+  doc.transact(() => {
+    for (const id of [...threads.keys()]) threads.delete(id);
+  });
+}
+
 /** Resolves the thread for `author`, or reopens it for null. */
 export function setResolved(doc: Y.Doc, threadId: string, author: Author | null): void {
   const thread = threadsMap(doc).get(threadId);

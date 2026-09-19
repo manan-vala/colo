@@ -17,8 +17,10 @@ import { Toolbar } from "../editor/toolbar/Toolbar";
 import { MenuBar } from "./MenuBar";
 import { Outline } from "./Outline";
 import { PageSetupDialog } from "./PageSetupDialog";
+import { ImportReportDialog } from "./ImportReportDialog";
 import { PrintStyles } from "./PrintStyles";
 import { RestorePointsDialog } from "./RestorePointsDialog";
+import { useFileTransfers } from "./useFileTransfers";
 
 const OUTLINE_KEY = "colo.outlineOpen";
 const DESKTOP_QUERY = "(min-width: 1024px)";
@@ -110,6 +112,7 @@ function DocumentScreen({
   // Comments: a margin beside the page when it fits, otherwise the comments panel.
   const author = useMemo(() => ({ id: member.id, name: member.displayName }), [member.id, member.displayName]);
   const { state: comments, actions: commentActions } = useComments(editor, collab.doc, author);
+  const files = useFileTransfers({ editor, collab, author, onError });
   const [commentsSheetOpen, setCommentsSheetOpen] = useState(false);
   const canvasRef = useRef<HTMLElement>(null);
   const canvasWidth = useElementWidth(canvasRef);
@@ -150,6 +153,7 @@ function DocumentScreen({
   return (
     <div className="flex h-svh flex-col bg-[#f9fbfd] print:block print:h-auto print:bg-white">
       <PrintStyles settings={pageSettings} paged={paged} />
+      {files.inputs}
       <input
         ref={imageInput}
         type="file"
@@ -178,6 +182,9 @@ function DocumentScreen({
             onInsertImage={insertImage}
             onPageSetup={() => setPageSetupOpen(true)}
             onRestorePoints={() => setRestorePointsOpen(true)}
+            onOpenFile={files.openFile}
+            onReplaceWithFile={files.replaceWithFile}
+            onDownload={files.download}
             pageSettings={pageSettings}
             onPageSettingsChange={(next) => updatePageSettings(collab.doc, next)}
             onError={onError}
@@ -225,6 +232,7 @@ function DocumentScreen({
       )}
 
       <CommentsSheet state={comments} actions={commentActions} open={commentsSheetOpen} onOpenChange={setCommentsSheetOpen} />
+      <ImportReportDialog report={files.report} onClose={files.closeReport} />
       <RestorePointsDialog docId={collab.docId} open={restorePointsOpen} onOpenChange={setRestorePointsOpen} />
       <PageSetupDialog open={pageSetupOpen} onOpenChange={setPageSetupOpen} settings={pageSettings} onApply={applyPageSettings} />
       {!desktop && (

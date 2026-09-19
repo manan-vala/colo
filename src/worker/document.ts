@@ -279,12 +279,17 @@ export class Document extends YServer<Env> {
       case "GET restore-points":
         return json({ points: listPoints(sql) } satisfies ListRestorePointsResponse);
       case "POST restore-points": {
-        const { label } = await readJson<CreateRestorePointRequest>(request);
+        const { label, kind } = await readJson<CreateRestorePointRequest>(request);
         const name = typeof label === "string" ? label.trim().replace(/\s+/g, " ") : "";
         if (!name || name.length > LIMITS.restorePointLabelLength) {
           throw new HttpError(400, "INVALID", `A name of 1 to ${LIMITS.restorePointLabelLength} characters is required`);
         }
-        const point = this.savePoint({ kind: "named", label: name, state: Y.encodeStateAsUpdate(this.document), createdBy: person(identity) });
+        const point = this.savePoint({
+          kind: kind === "import" ? "import" : "named",
+          label: name,
+          state: Y.encodeStateAsUpdate(this.document),
+          createdBy: person(identity),
+        });
         return json(point, { status: 201 });
       }
       case "POST restore-points/:id": {

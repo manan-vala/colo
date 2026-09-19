@@ -17,6 +17,7 @@ import {
 import type { PageSettings } from "../../shared/doc-schema";
 import type { DocumentSummary } from "../../shared/protocol";
 import { api } from "../api";
+import { DOWNLOAD_FORMATS, type ExportKind } from "../convert/formats";
 import { shortcutLabel } from "../editor/toolbar/controls";
 import { TableGridPicker, insertTable } from "../editor/toolbar/TableControls";
 import { PARAGRAPH_STYLES, ZOOM_LEVELS, applyParagraphStyle } from "../editor/toolbar/TextMenus";
@@ -36,6 +37,11 @@ export interface MenuBarProps {
   onInsertImage: () => void;
   onPageSetup: () => void;
   onRestorePoints: () => void;
+  /** Opens a file as a new document. */
+  onOpenFile: () => void;
+  /** Replaces this document's content with a file. */
+  onReplaceWithFile: () => void;
+  onDownload: (kind: ExportKind | "pdf") => void;
   pageSettings: PageSettings;
   onPageSettingsChange: (settings: PageSettings) => void;
   onError: (message: string) => void;
@@ -80,6 +86,9 @@ export function MenuBar({
   onInsertImage,
   onPageSetup,
   onRestorePoints,
+  onOpenFile,
+  onReplaceWithFile,
+  onDownload,
   pageSettings,
   onPageSettingsChange,
   onError,
@@ -103,6 +112,7 @@ export function MenuBar({
         <MenubarTrigger className="px-2 py-0.5 font-normal">File</MenubarTrigger>
         <MenubarContent onCloseAutoFocus={keepEditorFocus}>
           <MenubarItem onSelect={newDocument}>New document</MenubarItem>
+          <MenubarItem onSelect={onOpenFile}>Open file…</MenubarItem>
           <MenubarItem
             onSelect={() => {
               const input = document.getElementById(TITLE_INPUT_ID) as HTMLInputElement | null;
@@ -111,6 +121,17 @@ export function MenuBar({
           >
             Rename
           </MenubarItem>
+          <MenubarItem onSelect={onReplaceWithFile}>Replace with file…</MenubarItem>
+          <MenubarSub>
+            <MenubarSubTrigger>Download</MenubarSubTrigger>
+            <MenubarSubContent>
+              {DOWNLOAD_FORMATS.map((format) => (
+                <MenubarItem key={format.kind} onSelect={() => onDownload(format.kind)}>
+                  {format.label}
+                </MenubarItem>
+              ))}
+            </MenubarSubContent>
+          </MenubarSub>
           <MenubarSeparator />
           <MenubarItem onSelect={onRestorePoints}>Restore points…</MenubarItem>
           <MenubarItem onSelect={onPageSetup}>Page setup…</MenubarItem>

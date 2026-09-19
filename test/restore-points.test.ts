@@ -164,6 +164,17 @@ describe("restore points API", () => {
     bea.close();
   });
 
+  it("saves an import point before a file replaces the document", async () => {
+    const { cookie } = await enroll();
+    const docId = await newDoc(cookie);
+    const response = await call(`/api/docs/${docId}/restore-points`, { body: { label: "Before importing “a.docx”", kind: "import" }, cookie });
+    expect(response.status).toBe(201);
+    expect(await response.json<RestorePoint>()).toMatchObject({ kind: "import", label: "Before importing “a.docx”" });
+    // Only named and import points can be created on request.
+    const other = await call(`/api/docs/${docId}/restore-points`, { body: { label: "x", kind: "pre-restore" }, cookie });
+    expect((await other.json<RestorePoint>()).kind).toBe("named");
+  });
+
   it("validates names, point IDs, sessions and origins", async () => {
     const { cookie } = await enroll();
     const docId = await newDoc(cookie);
