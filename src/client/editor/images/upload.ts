@@ -11,7 +11,7 @@ const UPLOAD_ERRORS: Record<string, string> = {
 };
 
 /** Uploads one prepared image to the document and returns its URL. */
-async function upload(docId: string, blob: Blob): Promise<string> {
+export async function uploadImageBlob(docId: string, blob: Blob): Promise<string> {
   const response = await fetch(`/api/docs/${docId}/images`, {
     method: "POST",
     headers: { "Content-Type": blob.type },
@@ -43,7 +43,7 @@ export async function insertImageFiles(
   for (const file of files) {
     try {
       const prepared = await prepareImage(file);
-      images.push({ src: await upload(options.docId, prepared.blob), width: prepared.width, height: prepared.height });
+      images.push({ src: await uploadImageBlob(options.docId, prepared.blob), width: prepared.width, height: prepared.height });
     } catch (error) {
       options.onError(error instanceof Error ? error.message : "The image could not be added.");
     }

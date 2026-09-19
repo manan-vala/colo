@@ -26,7 +26,7 @@ export { LINK_PROTOCOLS, isSafeLink, normalizeLink } from "./links";
  * adds Yjs on top, and the import/export converters use it on its own, so both always agree on
  * what a document can contain.
  */
-export function documentExtensions(docId: string): AnyExtension[] {
+export function documentExtensions(docId: string, { importing = false }: { importing?: boolean } = {}): AnyExtension[] {
   return [
     StarterKit.configure({
       // Collaboration brings Yjs-aware undo/redo, so Tiptap's own history is disabled.
@@ -57,7 +57,8 @@ export function documentExtensions(docId: string): AnyExtension[] {
     PageBreak,
     Pagination,
     CommentMark,
-    ColoImage.configure({ docId }),
+    // Importers parse images that are not uploaded yet; the live editor never accepts those.
+    ColoImage.configure({ docId, acceptPending: importing }),
   ];
 }
 

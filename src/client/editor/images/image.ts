@@ -1,6 +1,7 @@
 import Image from "@tiptap/extension-image";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
 import { IMAGE_PATH } from "../../../shared/protocol";
+import { PENDING_IMAGE } from "../../convert/model";
 import { ImageView } from "./image-view";
 import { imageFiles, insertImageFiles } from "./upload";
 
@@ -28,6 +29,15 @@ export function ownImagePath(src: string | null): string | null {
   }
 }
 
+/**
+ * The `src` an image may have in the document: a Colo image path, or while a file is being
+ * imported (never in the live editor) a placeholder for an image not uploaded yet.
+ */
+function acceptedSource(src: string | null, acceptPending: boolean): string | null {
+  if (acceptPending && src?.startsWith(PENDING_IMAGE)) return src;
+  return ownImagePath(src);
+}
+
 const positiveInt = (value: string | null) => {
   const n = Math.round(Number(value));
   return Number.isFinite(n) && n > 0 ? n : null;
@@ -41,11 +51,11 @@ const positiveInt = (value: string | null) => {
  * Only Colo's own image URLs are accepted from pasted HTML: other sources would be third-party
  * requests (and are blocked by the CSP anyway). Pasted or dropped image files are uploaded.
  */
-export const ColoImage = Image.extend<{ docId: string }, ImageStorage>({
+export const ColoImage = Image.extend<{ docId: string; acceptPending: boolean }, ImageStorage>({
   draggable: true,
 
   addOptions() {
-    return { ...this.parent!(), inline: false, allowBase64: false, resize: false, docId: "" };
+    return { ...this.parent!(), inline: false, allowBase64: false, resize: false, docId: "", acceptPending: false };
   },
 
   addStorage() {
@@ -63,8 +73,9 @@ export const ColoImage = Image.extend<{ docId: string }, ImageStorage>({
   },
 
   addAttributes() {
+    const source = (element: HTMLElement) => acceptedSource(element.getAttribute("src"), this.options.acceptPending);
     return {
-      src: { default: null, parseHTML: (element) => ownImagePath(element.getAttribute("src")) },
+      src: { default: null, parseHTML: source },
       alt: { default: null },
       width: { default: null, parseHTML: (element) => positiveInt(element.getAttribute("width")) },
       height: { default: null, parseHTML: (element) => positiveInt(element.getAttribute("height")) },
@@ -72,7 +83,8 @@ export const ColoImage = Image.extend<{ docId: string }, ImageStorage>({
   },
 
   parseHTML() {
-    return [{ tag: "img[src]", getAttrs: (element) => (ownImagePath(element.getAttribute("src")) ? null : false) }];
+    const accepted = (element: HTMLElement) => acceptedSource(element.getAttribute("src"), this.options.acceptPending);
+    return [{ tag: "img[src]", getAttrs: (element) => (accepted(element) ? null : false) }];
   },
 
   addNodeView() {
