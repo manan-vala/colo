@@ -110,6 +110,26 @@ export const DOCUMENT_MIGRATIONS: Migration[] = [
       ) WITHOUT ROWID;
     `);
   },
+  // 4: restore points: a copy of the whole Yjs state, chunked like doc_state (M6)
+  (sql) => {
+    sql.exec(`
+      CREATE TABLE restore_points (
+        id              TEXT PRIMARY KEY,
+        kind            TEXT NOT NULL CHECK (kind IN ('auto', 'named', 'pre-restore', 'import')),
+        label           TEXT,
+        created_at      TEXT NOT NULL,
+        created_by      TEXT,
+        created_by_name TEXT,
+        state_bytes     INTEGER NOT NULL
+      ) WITHOUT ROWID;
+      CREATE TABLE restore_point_chunks (
+        point_id        TEXT NOT NULL REFERENCES restore_points(id),
+        seq             INTEGER NOT NULL,
+        data            BLOB NOT NULL,
+        PRIMARY KEY (point_id, seq)
+      ) WITHOUT ROWID;
+    `);
+  },
 ];
 
 export function readSchemaVersion(sql: SqlStorage): number {

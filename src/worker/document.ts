@@ -2,11 +2,30 @@ import type { Connection, ConnectionContext, WSMessage } from "partyserver";
 import { YServer } from "y-partyserver";
 import * as Y from "yjs";
 import { SETTINGS_KEYS, SETTINGS_MAP } from "../shared/doc-schema";
-import { CLOSE_CODES, LIMITS, type ControlEvent } from "../shared/protocol";
+import {
+  CLOSE_CODES,
+  LIMITS,
+  isUlid,
+  type ControlEvent,
+  type CreateRestorePointRequest,
+  type ListRestorePointsResponse,
+  type RestoreResponse,
+} from "../shared/protocol";
 import { DOCUMENT_MIGRATIONS, migrate } from "./db";
 import { IDENTITY_HEADER, INTERNAL_HOST, decodeIdentity, type DocumentIdentity } from "./documents";
-import { HttpError, errorResponse } from "./http";
+import { HttpError, errorResponse, json, readJson } from "./http";
 import { serveImage, uploadImage } from "./images";
+import {
+  AUTO_POINT_INTERVAL,
+  createPoint,
+  getPoint,
+  isEmptyState,
+  latestPointAt,
+  listPoints,
+  readPointState,
+  replaceState,
+  type NewPoint,
+} from "./restore-points";
 import {
   clearPendingMeta,
   readPendingMeta,
@@ -53,6 +72,8 @@ export class Document extends YServer<Env> {
   private lastEditAt: string | null = null;
   private lastMetaPush = 0;
   private persistedMeta: PendingMeta | null = null;
+  /** When the newest restore point was taken (ms); decides when the next automatic one is due. */
+  private lastPointAt = 0;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -70,6 +91,7 @@ export class Document extends YServer<Env> {
       Y.applyUpdate(this.document, state);
       this.readOnly = state.byteLength > LIMITS.docStateBytes;
     }
+    this.lastPointAt = latestPointAt(sql);
     const pending = readPendingMeta(sql);
     if (pending) {
       this.metaDirty = true;
@@ -92,6 +114,7 @@ export class Document extends YServer<Env> {
   }
 
   async onSave(): Promise<void> {
+    this.takeAutomaticPoint();
     const state = Y.encodeStateAsUpdate(this.document);
     writeState(this.ctx.storage, state);
 
@@ -100,6 +123,24 @@ export class Document extends YServer<Env> {
     this.readOnly = tooLarge;
     this.broadcastControl({ type: "saved", at: new Date().toISOString() });
     await this.pushMeta();
+  }
+
+  /**
+   * Before a save, at most every 30 minutes: the state saved last time becomes an automatic
+   * restore point. Each one is the document as it stood before a stretch of editing began.
+   * About two rows per 30 minutes of editing (plan §9.2).
+   */
+  private takeAutomaticPoint() {
+    if (Date.now() - this.lastPointAt < AUTO_POINT_INTERVAL) return;
+    const previous = readState(this.ctx.storage.sql);
+    if (!previous || isEmptyState(previous)) return;
+    this.savePoint({ kind: "auto", state: previous });
+  }
+
+  private savePoint(point: NewPoint) {
+    const saved = createPoint(this.ctx.storage, point);
+    this.lastPointAt = Date.parse(saved.createdAt);
+    return saved;
   }
 
   isReadOnly(): boolean {
@@ -229,13 +270,53 @@ export class Document extends YServer<Env> {
     const [, docId, resource, rest = ""] = match;
     const { sql } = this.ctx.storage;
     const route = `${request.method} ${resource}${rest ? "/:id" : ""}`;
+    // restore-points/<id>/restore is the one nested route.
     switch (route) {
       case "POST images":
         return uploadImage(sql, docId, identity.memberId, request);
       case "GET images/:id":
         return serveImage(sql, rest);
+      case "GET restore-points":
+        return json({ points: listPoints(sql) } satisfies ListRestorePointsResponse);
+      case "POST restore-points": {
+        const { label } = await readJson<CreateRestorePointRequest>(request);
+        const name = typeof label === "string" ? label.trim().replace(/\s+/g, " ") : "";
+        if (!name || name.length > LIMITS.restorePointLabelLength) {
+          throw new HttpError(400, "INVALID", `A name of 1 to ${LIMITS.restorePointLabelLength} characters is required`);
+        }
+        const point = this.savePoint({ kind: "named", label: name, state: Y.encodeStateAsUpdate(this.document), createdBy: person(identity) });
+        return json(point, { status: 201 });
+      }
+      case "POST restore-points/:id": {
+        const pointId = /^([^/]+)\/restore$/.exec(rest)?.[1];
+        if (pointId) return json(await this.restore(pointId, identity));
+        break;
+      }
     }
     throw new HttpError(404, "NOT_FOUND");
+  }
+
+  /**
+   * Restores a point (plan §2.3): keeps the current document as a `pre-restore` point, rewinds
+   * the live document (every connected client receives it as an ordinary change) and saves.
+   */
+  private async restore(pointId: string, identity: DocumentIdentity): Promise<RestoreResponse> {
+    const { sql } = this.ctx.storage;
+    const point = isUlid(pointId) ? getPoint(sql, pointId) : null;
+    const snapshot = point ? readPointState(sql, pointId) : null;
+    if (!point || !snapshot) throw new HttpError(404, "NOT_FOUND");
+
+    const saved = this.savePoint({
+      kind: "pre-restore",
+      label: point.label ? `Before restoring “${point.label}”` : null,
+      state: Y.encodeStateAsUpdate(this.document),
+      createdBy: person(identity),
+    });
+    replaceState(this.document, snapshot);
+    this.lastEditor = identity.memberId;
+    await this.onSave();
+    this.broadcastControl({ type: "restored", by: identity.displayName, at: point.createdAt });
+    return { restored: point, saved };
   }
 
   private async onInternalRequest(request: Request, url: URL): Promise<Response> {
@@ -273,3 +354,5 @@ export class Document extends YServer<Env> {
     this.broadcastCustomMessage(JSON.stringify(event));
   }
 }
+
+const person = (identity: DocumentIdentity) => ({ id: identity.memberId, displayName: identity.displayName });

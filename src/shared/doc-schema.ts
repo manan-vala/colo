@@ -149,3 +149,15 @@ function readHeaderFooter(value: unknown): HeaderFooterText | null {
   if (typeof left !== "string" || typeof right !== "string") return null;
   return { left: left.slice(0, HEADER_FOOTER_MAX_LENGTH), right: right.slice(0, HEADER_FOOTER_MAX_LENGTH) };
 }
+
+// ---- restore points (M6) -----------------------------------------------------------------
+
+/**
+ * Every top-level shared type and its Yjs type. Restoring a restore point rewinds each of them,
+ * including ones created after the point was taken; add new top-level types here.
+ */
+export const ROOT_TYPES = {
+  [CONTENT_FIELD]: "XmlFragment",
+  [SETTINGS_MAP]: "Map",
+  [COMMENTS_MAP]: "Map",
+} as const;

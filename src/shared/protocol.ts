@@ -102,6 +102,9 @@ export const LIMITS = {
   imageMaxSide: 2048,
   /** All images of one document together. */
   documentImageBytes: 200_000_000,
+  /** Restore points kept per document; the oldest automatic ones are dropped first. */
+  restorePoints: 50,
+  restorePointLabelLength: 100,
 } as const;
 
 // ---- images (M6) ----------------------------------------------------------------
@@ -117,6 +120,40 @@ export const imagePath = (docId: string, imageId: string) => `/api/docs/${docId}
 
 /** Matches `imagePath`, for accepting only Colo's own images in pasted content. */
 export const IMAGE_PATH = /^\/api\/docs\/[0-9A-HJKMNP-TV-Z]{26}\/images\/[0-9A-HJKMNP-TV-Z]{26}$/;
+
+// ---- restore points (M6) ------------------------------------------------------------
+
+/**
+ * `auto`: taken before a stretch of editing; `named`: saved by someone; `pre-restore`: the
+ * document just before a restore; `import`: the document before a DOCX import (M7).
+ */
+export type RestorePointKind = "auto" | "named" | "pre-restore" | "import";
+
+export interface RestorePoint {
+  id: string;
+  kind: RestorePointKind;
+  label: string | null;
+  createdAt: string;
+  /** Null for automatic points. */
+  createdBy: PersonRef | null;
+  /** Size of the saved Yjs state. */
+  bytes: number;
+}
+
+/** `GET /api/docs/:id/restore-points`, newest first */
+export interface ListRestorePointsResponse {
+  points: RestorePoint[];
+}
+/** `POST /api/docs/:id/restore-points` */
+export interface CreateRestorePointRequest {
+  label: string;
+}
+/** `POST /api/docs/:id/restore-points/:pointId/restore` */
+export interface RestoreResponse {
+  restored: RestorePoint;
+  /** The `pre-restore` point holding the document as it was just before. */
+  saved: RestorePoint;
+}
 
 /** `POST /api/docs/:id/images` (raw image body) */
 export interface UploadImageResponse {
