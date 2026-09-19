@@ -5,6 +5,8 @@ import { SETTINGS_KEYS, SETTINGS_MAP } from "../shared/doc-schema";
 import { CLOSE_CODES, LIMITS, type ControlEvent } from "../shared/protocol";
 import { DOCUMENT_MIGRATIONS, migrate } from "./db";
 import { IDENTITY_HEADER, INTERNAL_HOST, decodeIdentity, type DocumentIdentity } from "./documents";
+import { HttpError, errorResponse } from "./http";
+import { serveImage, uploadImage } from "./images";
 import {
   clearPendingMeta,
   readPendingMeta,
@@ -201,13 +203,43 @@ export class Document extends YServer<Env> {
     super.onMessage(connection, message);
   }
 
-  // ---- internal requests from Workspace ---------------------------------------
+  // ---- HTTP requests ------------------------------------------------------------
 
+  /**
+   * Two kinds of request reach the object: internal ones from Workspace (rename, sign-out,
+   * delete) and member requests the Worker has authorised (images, restore points), which carry
+   * the member's identity in a header only the Worker sets.
+   */
   async onRequest(request: Request): Promise<Response> {
     const url = new URL(request.url);
-    if (url.hostname !== INTERNAL_HOST || request.method !== "POST") {
-      return Response.json({ error: "NOT_FOUND" }, { status: 404 });
+    try {
+      if (url.hostname === INTERNAL_HOST) return await this.onInternalRequest(request, url);
+      const identity = decodeIdentity(request.headers.get(IDENTITY_HEADER));
+      if (!identity) throw new HttpError(403, "FORBIDDEN");
+      return await this.onMemberRequest(request, url.pathname, identity);
+    } catch (error) {
+      return errorResponse(error);
     }
+  }
+
+  /** `/api/docs/:id/images…` and `/api/docs/:id/restore-points…` for this document. */
+  private async onMemberRequest(request: Request, pathname: string, identity: DocumentIdentity): Promise<Response> {
+    const match = /^\/api\/docs\/([^/]+)\/(images|restore-points)(?:\/(.*))?$/.exec(pathname);
+    if (!match || match[1] !== this.name) throw new HttpError(404, "NOT_FOUND");
+    const [, docId, resource, rest = ""] = match;
+    const { sql } = this.ctx.storage;
+    const route = `${request.method} ${resource}${rest ? "/:id" : ""}`;
+    switch (route) {
+      case "POST images":
+        return uploadImage(sql, docId, identity.memberId, request);
+      case "GET images/:id":
+        return serveImage(sql, rest);
+    }
+    throw new HttpError(404, "NOT_FOUND");
+  }
+
+  private async onInternalRequest(request: Request, url: URL): Promise<Response> {
+    if (request.method !== "POST") throw new HttpError(404, "NOT_FOUND");
     const body = (await request.json()) as Record<string, unknown>;
     switch (url.pathname) {
       case "/title": {

@@ -96,13 +96,41 @@ export const LIMITS = {
   messagesPerSecond: 30,
   messageBurst: 600,
   docStateBytes: 25_000_000,
+  /** One image after compression in the browser (plan §2.3). */
+  imageBytes: 1_000_000,
+  /** Longest side the browser scales images down to. */
+  imageMaxSide: 2048,
+  /** All images of one document together. */
+  documentImageBytes: 200_000_000,
 } as const;
+
+// ---- images (M6) ----------------------------------------------------------------
+
+/** Image types the Document object stores; SVG is refused (it can carry script). */
+export const IMAGE_TYPES = ["image/webp", "image/png", "image/jpeg", "image/gif"] as const;
+export type ImageType = (typeof IMAGE_TYPES)[number];
+
+export const isImageType = (value: string): value is ImageType => (IMAGE_TYPES as readonly string[]).includes(value);
+
+/** Where an uploaded image is served; also the `src` stored in the document. */
+export const imagePath = (docId: string, imageId: string) => `/api/docs/${docId}/images/${imageId}`;
+
+/** Matches `imagePath`, for accepting only Colo's own images in pasted content. */
+export const IMAGE_PATH = /^\/api\/docs\/[0-9A-HJKMNP-TV-Z]{26}\/images\/[0-9A-HJKMNP-TV-Z]{26}$/;
+
+/** `POST /api/docs/:id/images` (raw image body) */
+export interface UploadImageResponse {
+  id: string;
+  url: string;
+}
 
 /** Server → client control events, sent as y-partyserver custom string messages. */
 export type ControlEvent =
   | { type: "saved"; at: string }
   | { type: "session-expired" }
   | { type: "document-deleted" }
+  /** Someone restored a restore point; `by` is their display name. */
+  | { type: "restored"; by: string; at: string }
   | { type: "limit"; code: "MESSAGE_TOO_LARGE" | "RATE_LIMITED" | "DOCUMENT_TOO_LARGE" };
 
 /** WebSocket close codes used by the Document object. */
@@ -114,8 +142,10 @@ export const CLOSE_CODES = {
   messageTooLarge: 1009,
 } as const;
 
-const DOC_ID = /^[0-9A-HJKMNP-TV-Z]{26}$/;
-export const isDocumentId = (value: string) => DOC_ID.test(value);
+const ULID = /^[0-9A-HJKMNP-TV-Z]{26}$/;
+/** Document, image and restore point IDs are ULIDs. */
+export const isUlid = (value: string) => ULID.test(value);
+export const isDocumentId = isUlid;
 
 /** Stable cursor colour for a member. */
 export function memberColor(memberId: string): string {

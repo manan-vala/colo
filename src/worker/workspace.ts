@@ -156,6 +156,24 @@ export class Workspace extends DurableObject<Env> {
     }
   }
 
+  /**
+   * Called by the Worker before forwarding a document HTTP request (images, restore points).
+   * Unlike a socket, a request needs no revocation record, so this writes nothing.
+   */
+  async authorizeRequest(
+    cookieHeader: string | null,
+    docId: string,
+  ): Promise<{ ok: true; identity: DocumentIdentity } | { ok: false; status: number; error: string }> {
+    try {
+      const session = await this.auth.authenticate(cookieHeader, { slide: false });
+      if (!session) return { ok: false, status: 401, error: "UNAUTHORIZED" };
+      return { ok: true, identity: this.documents.identify(session.member, session.idHash, session.expiresAt, docId) };
+    } catch (error) {
+      if (error instanceof HttpError) return { ok: false, status: error.status, error: error.code };
+      throw error;
+    }
+  }
+
   /** Called by Document objects after saving (throttled to once a minute per document). */
   async updateDocumentMeta(docId: string, meta: DocumentMeta): Promise<void> {
     this.documents.updateMeta(docId, meta);

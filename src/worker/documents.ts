@@ -154,13 +154,19 @@ export class Documents {
 
   /** Checks that a document may be opened and records the session for revocation. */
   authorize(member: Member, sessionHash: string, sessionExpiresAt: string, id: string): DocumentIdentity {
-    this.get(id);
+    const identity = this.identify(member, sessionHash, sessionExpiresAt, id);
     this.sql.exec(
       "INSERT INTO document_sessions (session_hash, doc_id, connected_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
       sessionHash,
       id,
       isoNow(),
     );
+    return identity;
+  }
+
+  /** Checks that a live document exists and returns who is asking; writes nothing. */
+  identify(member: Member, sessionHash: string, sessionExpiresAt: string, id: string): DocumentIdentity {
+    this.get(id);
     return {
       memberId: member.id,
       displayName: member.displayName,

@@ -97,6 +97,19 @@ export const DOCUMENT_MIGRATIONS: Migration[] = [
       );
     `);
   },
+  // 3: images, one row each (an image is at most 1 MB, under the 2 MB row limit) (M6)
+  (sql) => {
+    sql.exec(`
+      CREATE TABLE images (
+        id            TEXT PRIMARY KEY,
+        mime          TEXT NOT NULL CHECK (mime IN ('image/webp', 'image/png', 'image/jpeg', 'image/gif')),
+        bytes         INTEGER NOT NULL,
+        data          BLOB NOT NULL,
+        created_at    TEXT NOT NULL,
+        created_by    TEXT NOT NULL
+      ) WITHOUT ROWID;
+    `);
+  },
 ];
 
 export function readSchemaVersion(sql: SqlStorage): number {

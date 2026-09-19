@@ -65,6 +65,18 @@ export default {
       return env.DOCUMENT.getByName(socket[1], { locationHint: "apac" }).fetch(new Request(request, { headers }));
     }
 
+    // Images and restore points are served by the document's own object (plan §4.1).
+    const documentRoute = /^\/api\/docs\/([^/]+)\/(?:images|restore-points)(?:\/|$)/.exec(url.pathname);
+    if (documentRoute) {
+      if (!isDocumentId(documentRoute[1])) return jsonError(404, "NOT_FOUND");
+      const auth = await workspace.authorizeRequest(request.headers.get("Cookie"), documentRoute[1]);
+      if (!auth.ok) return jsonError(auth.status, auth.error);
+      const headers = new Headers(request.headers);
+      headers.set(IDENTITY_HEADER, encodeIdentity(auth.identity));
+      const document = env.DOCUMENT.getByName(documentRoute[1], { locationHint: "apac" });
+      return withSecurityHeaders(await document.fetch(new Request(request, { headers })));
+    }
+
     const response = await workspace.fetch(request);
     return response.webSocket ? response : withSecurityHeaders(response);
   },
