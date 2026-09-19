@@ -34,8 +34,12 @@ export function normalizeLink(url: string): string {
   return `https://${trimmed.replace(/^\/\//, "")}`;
 }
 
-/** The rich-text feature set (plan F5), bound to a collaborative Yjs document. */
-export function buildExtensions(collab: CollaborationState): AnyExtension[] {
+/**
+ * The document schema and editing behaviour (plan F5) without collaboration: the live editor
+ * adds Yjs on top, and the import/export converters use it on its own, so both always agree on
+ * what a document can contain.
+ */
+export function documentExtensions(docId: string): AnyExtension[] {
   return [
     StarterKit.configure({
       // Collaboration brings Yjs-aware undo/redo, so Tiptap's own history is disabled.
@@ -66,7 +70,14 @@ export function buildExtensions(collab: CollaborationState): AnyExtension[] {
     PageBreak,
     Pagination,
     CommentMark,
-    ColoImage.configure({ docId: collab.docId }),
+    ColoImage.configure({ docId }),
+  ];
+}
+
+/** The live editor: the document extensions bound to a collaborative Yjs document. */
+export function buildExtensions(collab: CollaborationState): AnyExtension[] {
+  return [
+    ...documentExtensions(collab.docId),
     Placeholder.configure({ placeholder: "Start typing…" }),
     Collaboration.configure({ document: collab.doc, field: CONTENT_FIELD }),
     CollaborationCaret.configure({ provider: collab.provider, user: collab.user }),
