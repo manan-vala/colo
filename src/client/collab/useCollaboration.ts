@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import YProvider from "y-partyserver/provider";
 import * as Y from "yjs";
 import { CLOSE_CODES, type ControlEvent, type Member, memberColor } from "../../shared/protocol";
@@ -57,6 +57,9 @@ export function useCollaboration(docId: string, member: Member): Collaboration |
   const [session, setSession] = useState<{ doc: Y.Doc; provider: YProvider } | null>(null);
   const [status, setStatus] = useState<Status>(INITIAL_STATUS);
   const { id: memberId, displayName } = member;
+  // Read by event handlers; a change of name must not reconnect the document.
+  const nameRef = useRef(displayName);
+  nameRef.current = displayName;
 
   useEffect(() => {
     const doc = new Y.Doc();
@@ -108,6 +111,11 @@ export function useCollaboration(docId: string, member: Member): Collaboration |
         case "document-deleted":
           provider.shouldConnect = false;
           update({ ended: event.type });
+          break;
+        case "restored":
+          // Restores arrive as an ordinary remote change, so undo (which only covers one's own
+          // typing) cannot revert one by accident.
+          showNotice(event.by === nameRef.current ? "You restored an earlier version." : `${event.by} restored an earlier version.`);
           break;
         case "limit":
           if (event.code === "DOCUMENT_TOO_LARGE") showNotice("This document has reached its size limit and is now read-only.", true);

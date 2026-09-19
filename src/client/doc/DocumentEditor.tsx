@@ -18,6 +18,7 @@ import { MenuBar } from "./MenuBar";
 import { Outline } from "./Outline";
 import { PageSetupDialog } from "./PageSetupDialog";
 import { PrintStyles } from "./PrintStyles";
+import { RestorePointsDialog } from "./RestorePointsDialog";
 
 const OUTLINE_KEY = "colo.outlineOpen";
 const DESKTOP_QUERY = "(min-width: 1024px)";
@@ -82,6 +83,7 @@ function DocumentScreen({
   const layout = useMemo(() => resolvePageLayout(pageSettings), [pageSettings]);
   const paged = pageSettings.pagination && wide;
   const [pageSetupOpen, setPageSetupOpen] = useState(false);
+  const [restorePointsOpen, setRestorePointsOpen] = useState(false);
   useEffect(() => {
     editor.commands.setPageLayout(paged ? layout : null);
   }, [editor, paged, layout]);
@@ -175,6 +177,7 @@ function DocumentScreen({
             onInsertComment={addComment}
             onInsertImage={insertImage}
             onPageSetup={() => setPageSetupOpen(true)}
+            onRestorePoints={() => setRestorePointsOpen(true)}
             pageSettings={pageSettings}
             onPageSettingsChange={(next) => updatePageSettings(collab.doc, next)}
             onError={onError}
@@ -222,6 +225,7 @@ function DocumentScreen({
       )}
 
       <CommentsSheet state={comments} actions={commentActions} open={commentsSheetOpen} onOpenChange={setCommentsSheetOpen} />
+      <RestorePointsDialog docId={collab.docId} open={restorePointsOpen} onOpenChange={setRestorePointsOpen} />
       <PageSetupDialog open={pageSetupOpen} onOpenChange={setPageSetupOpen} settings={pageSettings} onApply={applyPageSettings} />
       {!desktop && (
         <Sheet open={outlineSheetOpen} onOpenChange={setOutlineSheetOpen}>

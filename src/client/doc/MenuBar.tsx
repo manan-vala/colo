@@ -35,6 +35,7 @@ export interface MenuBarProps {
   onInsertComment: () => void;
   onInsertImage: () => void;
   onPageSetup: () => void;
+  onRestorePoints: () => void;
   pageSettings: PageSettings;
   onPageSettingsChange: (settings: PageSettings) => void;
   onError: (message: string) => void;
@@ -78,6 +79,7 @@ export function MenuBar({
   onInsertComment,
   onInsertImage,
   onPageSetup,
+  onRestorePoints,
   pageSettings,
   onPageSettingsChange,
   onError,
@@ -110,6 +112,7 @@ export function MenuBar({
             Rename
           </MenubarItem>
           <MenubarSeparator />
+          <MenubarItem onSelect={onRestorePoints}>Restore points…</MenubarItem>
           <MenubarItem onSelect={onPageSetup}>Page setup…</MenubarItem>
           <MenubarItem onSelect={() => window.print()}>
             Print <Shortcut keys="Mod-P" />
