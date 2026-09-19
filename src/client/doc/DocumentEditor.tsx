@@ -1,14 +1,21 @@
 import { EditorContent, useEditor } from "@tiptap/react";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import type { PageSettings } from "../../shared/doc-schema";
+import { updatePageSettings, usePageSettings } from "../collab/usePageSettings";
 import type { Collaboration } from "../collab/useCollaboration";
 import { buildExtensions } from "../editor/extensions";
+import { resolvePageLayout } from "../editor/pages";
 import { Toolbar } from "../editor/toolbar/Toolbar";
 import { MenuBar } from "./MenuBar";
 import { Outline } from "./Outline";
+import { PageSetupDialog } from "./PageSetupDialog";
+import { PrintStyles } from "./PrintStyles";
 
 const OUTLINE_KEY = "colo.outlineOpen";
 const DESKTOP_QUERY = "(min-width: 1024px)";
+/** Narrower screens get a continuous page and no page bands (plan §6.2). */
+const PAGED_QUERY = "(min-width: 640px)";
 
 function readOutlinePreference(): boolean {
   try {
@@ -18,15 +25,16 @@ function readOutlinePreference(): boolean {
   }
 }
 
-function useIsDesktop(): boolean {
-  const [desktop, setDesktop] = useState(() => window.matchMedia(DESKTOP_QUERY).matches);
+function useMediaQuery(query: string): boolean {
+  const [matches, setMatches] = useState(() => window.matchMedia(query).matches);
   useEffect(() => {
-    const media = window.matchMedia(DESKTOP_QUERY);
-    const onChange = () => setDesktop(media.matches);
+    const media = window.matchMedia(query);
+    const onChange = () => setMatches(media.matches);
+    onChange();
     media.addEventListener("change", onChange);
     return () => media.removeEventListener("change", onChange);
-  }, []);
-  return desktop;
+  }, [query]);
+  return matches;
 }
 
 /**
@@ -34,7 +42,12 @@ function useIsDesktop(): boolean {
  * the page canvas with the collaborative editor.
  */
 export function DocumentEditor({ collab, titleBar, onError }: { collab: Collaboration; titleBar: ReactNode; onError: (message: string) => void }) {
-  const desktop = useIsDesktop();
+  const desktop = useMediaQuery(DESKTOP_QUERY);
+  const wide = useMediaQuery(PAGED_QUERY);
+  const pageSettings = usePageSettings(collab.doc);
+  const layout = useMemo(() => resolvePageLayout(pageSettings), [pageSettings]);
+  const paged = pageSettings.pagination && wide;
+  const [pageSetupOpen, setPageSetupOpen] = useState(false);
   const [zoom, setZoom] = useState(100);
   const [outlinePreferred, setOutlinePreferred] = useState(readOutlinePreference);
   const [outlineSheetOpen, setOutlineSheetOpen] = useState(false);
@@ -60,6 +73,15 @@ export function DocumentEditor({ collab, titleBar, onError }: { collab: Collabor
     [collab.doc, collab.provider],
   );
 
+  useEffect(() => {
+    editor?.commands.setPageLayout(paged ? layout : null);
+  }, [editor, paged, layout]);
+
+  const applyPageSettings = (next: PageSettings) => {
+    updatePageSettings(collab.doc, next);
+    setPageSetupOpen(false);
+  };
+
   const outlineOpen = desktop ? outlinePreferred : outlineSheetOpen;
   const toggleOutline = () => {
     if (!desktop) {
@@ -77,8 +99,9 @@ export function DocumentEditor({ collab, titleBar, onError }: { collab: Collabor
   };
 
   return (
-    <div className="flex h-svh flex-col bg-[#f9fbfd]">
-      <header className="shrink-0 bg-background px-2 pt-2 sm:px-3">
+    <div className="flex h-svh flex-col bg-[#f9fbfd] print:block print:h-auto print:bg-white">
+      <PrintStyles settings={pageSettings} paged={paged} />
+      <header className="shrink-0 bg-background px-2 pt-2 sm:px-3 print:hidden">
         {titleBar}
         {editor && (
           <div className="overflow-x-auto pb-1 pl-9 [scrollbar-width:none]">
@@ -89,13 +112,16 @@ export function DocumentEditor({ collab, titleBar, onError }: { collab: Collabor
               outlineOpen={outlineOpen}
               onToggleOutline={toggleOutline}
               onInsertLink={() => setLinkOpen(true)}
+              onPageSetup={() => setPageSetupOpen(true)}
+              pageSettings={pageSettings}
+              onPageSettingsChange={(next) => updatePageSettings(collab.doc, next)}
               onError={onError}
             />
           </div>
         )}
       </header>
       {editor && (
-        <div className="shrink-0 bg-background px-2 pb-2 sm:px-3">
+        <div className="shrink-0 bg-background px-2 pb-2 sm:px-3 print:hidden">
           <Toolbar
             editor={editor}
             zoom={zoom}
@@ -108,26 +134,23 @@ export function DocumentEditor({ collab, titleBar, onError }: { collab: Collabor
         </div>
       )}
 
-      <div className="flex min-h-0 flex-1">
+      <div className="flex min-h-0 flex-1 print:block">
         {editor && desktop && outlinePreferred && (
-          <aside className="w-60 shrink-0 overflow-y-auto border-r bg-background/60 px-2 py-4">
+          <aside className="w-60 shrink-0 overflow-y-auto border-r bg-background/60 px-2 py-4 print:hidden">
             <Outline editor={editor} />
           </aside>
         )}
-        <main className="min-w-0 flex-1 overflow-auto" data-testid="canvas">
-          <div
-            className="colo-page-zoom"
-            ref={(element) => {
-              // CSS zoom keeps caret and selection coordinates correct in current browsers.
-              if (element) element.style.zoom = String(zoom / 100);
-            }}
-          >
-            <div className="colo-page">
+        <main className="min-w-0 flex-1 overflow-auto print:overflow-visible" data-testid="canvas">
+          {/* CSS zoom keeps caret and selection coordinates correct in current browsers. */}
+          <div className="colo-page-zoom" style={{ zoom: zoom / 100 }}>
+            <div className="colo-page" data-paged={paged || undefined}>
               <EditorContent editor={editor} />
             </div>
           </div>
         </main>
       </div>
+
+      <PageSetupDialog open={pageSetupOpen} onOpenChange={setPageSetupOpen} settings={pageSettings} onApply={applyPageSettings} />
 
       {editor && !desktop && (
         <Sheet open={outlineSheetOpen} onOpenChange={setOutlineSheetOpen}>

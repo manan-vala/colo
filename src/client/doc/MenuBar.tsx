@@ -14,6 +14,7 @@ import {
   MenubarSubTrigger,
   MenubarTrigger,
 } from "@/components/ui/menubar";
+import type { PageSettings } from "../../shared/doc-schema";
 import type { DocumentSummary } from "../../shared/protocol";
 import { api } from "../api";
 import { shortcutLabel } from "../editor/toolbar/controls";
@@ -31,7 +32,30 @@ export interface MenuBarProps {
   outlineOpen: boolean;
   onToggleOutline: () => void;
   onInsertLink: () => void;
+  onPageSetup: () => void;
+  pageSettings: PageSettings;
+  onPageSettingsChange: (settings: PageSettings) => void;
   onError: (message: string) => void;
+}
+
+/** Page number layouts offered by Insert → Page numbers, as header/footer text. */
+const PAGE_NUMBER_STYLES: { label: string; apply: (s: PageSettings) => PageSettings }[] = [
+  { label: "Bottom right: 1", apply: (s) => ({ ...s, footer: { ...s.footer, right: "{page}" } }) },
+  { label: "Bottom right: Page 1 of 2", apply: (s) => ({ ...s, footer: { ...s.footer, right: "Page {page} of {total}" } }) },
+  { label: "Bottom left: 1 / 2", apply: (s) => ({ ...s, footer: { ...s.footer, left: "{page} / {total}" } }) },
+  { label: "Top right: 1", apply: (s) => ({ ...s, header: { ...s.header, right: "{page}" } }) },
+];
+
+const hasPageField = (text: string) => /\{(page|total)\}/.test(text);
+
+/** Clears every header and footer text that shows a page number. */
+function removePageNumbers(s: PageSettings): PageSettings {
+  const clear = (text: string) => (hasPageField(text) ? "" : text);
+  return {
+    ...s,
+    header: { left: clear(s.header.left), right: clear(s.header.right) },
+    footer: { left: clear(s.footer.left), right: clear(s.footer.right) },
+  };
 }
 
 /** Menu commands focus the editor; stop Radix from moving focus back to the menu trigger. */
@@ -42,7 +66,18 @@ function Shortcut({ keys }: { keys: string }) {
 }
 
 /** File / Edit / View / Insert / Format, as in Google Docs. Later milestones add items. */
-export function MenuBar({ editor, zoom, onZoom, outlineOpen, onToggleOutline, onInsertLink, onError }: MenuBarProps) {
+export function MenuBar({
+  editor,
+  zoom,
+  onZoom,
+  outlineOpen,
+  onToggleOutline,
+  onInsertLink,
+  onPageSetup,
+  pageSettings,
+  onPageSettingsChange,
+  onError,
+}: MenuBarProps) {
   const state = useFormattingState(editor);
   if (!state) return null;
   const chain = () => editor.chain().focus();
@@ -69,6 +104,11 @@ export function MenuBar({ editor, zoom, onZoom, outlineOpen, onToggleOutline, on
             }}
           >
             Rename
+          </MenubarItem>
+          <MenubarSeparator />
+          <MenubarItem onSelect={onPageSetup}>Page setup…</MenubarItem>
+          <MenubarItem onSelect={() => window.print()}>
+            Print <Shortcut keys="Mod-P" />
           </MenubarItem>
           <MenubarSeparator />
           <MenubarItem onSelect={() => navigate("/")}>All documents</MenubarItem>
@@ -126,6 +166,22 @@ export function MenuBar({ editor, zoom, onZoom, outlineOpen, onToggleOutline, on
           </MenubarSub>
           <MenubarItem onSelect={() => chain().toggleTaskList().run()}>Checklist</MenubarItem>
           <MenubarItem onSelect={() => chain().setHorizontalRule().run()}>Horizontal line</MenubarItem>
+          <MenubarItem onSelect={() => chain().setPageBreak().run()}>
+            Page break <Shortcut keys="Mod-Enter" />
+          </MenubarItem>
+          <MenubarSub>
+            <MenubarSubTrigger>Page numbers</MenubarSubTrigger>
+            <MenubarSubContent>
+              {PAGE_NUMBER_STYLES.map((style) => (
+                <MenubarItem key={style.label} onSelect={() => onPageSettingsChange(style.apply(pageSettings))}>
+                  {style.label}
+                </MenubarItem>
+              ))}
+              <MenubarSeparator />
+              <MenubarItem onSelect={() => onPageSettingsChange(removePageNumbers(pageSettings))}>Remove page numbers</MenubarItem>
+              <MenubarItem onSelect={onPageSetup}>Headers &amp; footers…</MenubarItem>
+            </MenubarSubContent>
+          </MenubarSub>
         </MenubarContent>
       </MenubarMenu>
 

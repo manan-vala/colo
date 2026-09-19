@@ -201,11 +201,13 @@ img.ProseMirror-separator {
   display: block;
 }
 
-/* ---- Document page (M3; real pagination arrives in M4) ---------------------------------- */
+/* ---- Document canvas ----------------------------------------------------------------------- */
 
 .colo-page-zoom {
   padding: 12px 8px 48px;
 }
+
+/* Continuous page: narrow screens, or a document with pages turned off. */
 .colo-page {
   margin: 0 auto;
   width: 100%;
@@ -220,6 +222,16 @@ img.ProseMirror-separator {
   .colo-page {
     padding: 96px; /* 1in margins */
   }
+}
+
+/* Paged: the editor draws the pages itself (src/client/editor/pages). */
+.colo-page[data-paged] {
+  width: max-content;
+  max-width: none;
+  min-height: 0;
+  padding: 0;
+  background: none;
+  box-shadow: none;
 }
 
 /* ---- Document content --------------------------------------------------------------------- */
@@ -282,7 +294,7 @@ img.ProseMirror-separator {
   color: #9aa0a6;
 }
 
-/* Tables (TableKit with column resizing). */
+/* Tables (TableKit with column resizing; PagedTableView adds .colo-table). */
 .colo-editor .tableWrapper { overflow-x: auto; margin: 0.5em 0; }
 .colo-editor table { border-collapse: collapse; table-layout: fixed; width: 100%; margin: 0; overflow: hidden; }
 .colo-editor td, .colo-editor th {
@@ -312,6 +324,143 @@ img.ProseMirror-separator {
   pointer-events: none;
 }
 .colo-editor.resize-cursor { cursor: col-resize; }
+
+/* Page break: a labelled rule in a continuous document; sized by the paginator on pages. */
+.colo-editor .colo-page-break {
+  position: relative;
+  margin: 1em 0;
+  border-top: 1px dashed #bdc1c6;
+  cursor: default;
+}
+.colo-editor .colo-page-break::after {
+  content: "Page break";
+  position: absolute;
+  top: -0.7em;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 0 0.5em;
+  background: #fff;
+  color: #80868b;
+  font: 11px var(--font-sans);
+}
+.colo-editor .colo-page-break.ProseMirror-selectednode { outline: 2px solid #1a73e8; }
+
+/* ---- Pages (M4) ----------------------------------------------------------------------------
+ * See src/client/editor/pages/pagination.ts. Margin bands are full-width floats stacked from
+ * the top of the editor; text lines cannot sit beside them, and block formatting contexts
+ * (table rows, rules) move below them whole. Geometry comes from --colo-* variables that the
+ * paginator sets on the editor. */
+
+.colo-editor.colo-paged {
+  display: flow-root;
+  box-sizing: border-box;
+  width: var(--colo-page-width);
+  min-height: var(--colo-pages-height);
+  padding: 0 var(--colo-margin-right) 0 var(--colo-margin-left);
+  background: #fff;
+  box-shadow: 0 1px 3px rgb(60 64 67 / 15%), 0 1px 2px rgb(60 64 67 / 30%);
+}
+.colo-page-spacer {
+  float: left;
+  clear: both;
+  width: 0;
+  height: 0;
+  margin-top: var(--colo-content-height);
+}
+.colo-page-band {
+  float: left;
+  clear: both;
+  position: relative;
+  z-index: 1;
+  width: calc(100% + var(--colo-margin-left) + var(--colo-margin-right));
+  margin-left: calc(-1 * var(--colo-margin-left));
+  background: #fff;
+  user-select: none;
+}
+.colo-page-header,
+.colo-page-footer {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1em;
+  padding: 0 var(--colo-margin-right) 0 var(--colo-margin-left);
+  overflow: hidden;
+  color: #000;
+  font: 10pt/1.15 Arimo, Arial, sans-serif;
+  white-space: pre;
+  cursor: default;
+}
+.colo-page-header { height: var(--colo-margin-top); }
+.colo-page-footer { height: var(--colo-margin-bottom); }
+.colo-page-text { overflow: hidden; text-overflow: ellipsis; }
+.colo-page-gap {
+  height: var(--colo-page-gap);
+  margin: 0 -8px;
+  background: #f9fbfd;
+  box-shadow: inset 0 3px 3px -3px rgb(60 64 67 / 35%), inset 0 -3px 3px -3px rgb(60 64 67 / 35%);
+}
+
+.colo-paged .colo-page-break { margin: 0; border: none; }
+.colo-paged .colo-page-break::after { content: none; }
+.colo-paged .colo-pages + * { margin-top: 0; }
+/* Boxes that cannot overlap a band (block formatting contexts) must also be too wide to fit in
+ * the zero-width space beside one, or the browser squeezes them in there. */
+.colo-paged hr { overflow: hidden; width: 100%; } /* a rule moves below a band, not under it */
+.colo-paged ul[data-type="taskList"] > li { width: 100%; }
+
+/* Paged tables: each row is its own grid so bands can fall between rows. Tables with vertically
+ * merged cells keep table layout and move to the next page as a whole; one taller than a page
+ * scrolls inside it (and is cut off in print) rather than pushing pages apart. */
+.colo-paged .colo-table { overflow: visible; }
+.colo-paged .colo-table[data-merged-rows] {
+  max-height: calc(var(--colo-content-height) - 8px);
+  overflow: auto;
+}
+.colo-paged .colo-table:not([data-merged-rows]) :is(table, tbody) { display: contents; }
+.colo-paged .colo-table:not([data-merged-rows]) colgroup { display: none; }
+.colo-paged .colo-table:not([data-merged-rows]) tr {
+  display: grid;
+  grid-template-columns: var(--colo-columns);
+  width: 100%;
+}
+.colo-paged .colo-table:not([data-merged-rows]) :is(td, th) {
+  min-width: 0;
+  max-height: calc(var(--colo-content-height) - 8px); /* a row taller than a page scrolls */
+  overflow-y: auto;
+  border: none;
+  box-shadow: inset 1px 1px 0 #000, 1px 1px 0 #000; /* collapsed 1px grid lines */
+}
+.colo-paged .colo-table :is(td, th)[colspan="2"] { grid-column: span 2; }
+.colo-paged .colo-table :is(td, th)[colspan="3"] { grid-column: span 3; }
+.colo-paged .colo-table :is(td, th)[colspan="4"] { grid-column: span 4; }
+.colo-paged .colo-table :is(td, th)[colspan="5"] { grid-column: span 5; }
+.colo-paged .colo-table :is(td, th)[colspan="6"] { grid-column: span 6; }
+.colo-paged .colo-table :is(td, th)[colspan="7"] { grid-column: span 7; }
+.colo-paged .colo-table :is(td, th)[colspan="8"] { grid-column: span 8; }
+.colo-paged .colo-table :is(td, th)[colspan="9"] { grid-column: span 9; }
+.colo-paged .colo-table :is(td, th)[colspan="10"] { grid-column: span 10; }
+.colo-paged .colo-table :is(td, th)[colspan="11"] { grid-column: span 11; }
+.colo-paged .colo-table :is(td, th)[colspan="12"] { grid-column: span 12; }
+
+/* ---- Print --------------------------------------------------------------------------------
+ * PrintStyles sets @page. Paged documents print their drawn pages one-to-one: gaps disappear
+ * and every page is exactly one sheet tall. */
+@media print {
+  .colo-page-zoom { zoom: 1 !important; padding: 0 !important; }
+  .colo-page { max-width: none; min-height: 0; margin: 0; padding: 0; box-shadow: none; }
+  .colo-editor.colo-paged { min-height: var(--colo-print-height); box-shadow: none; }
+  /* The margin bands already decide where lines break; the default widows/orphans of 2 would
+   * move a paragraph's single last or first line to the next sheet and shift every page after. */
+  .colo-editor.colo-paged * { orphans: 1; widows: 1; }
+  .colo-page-gap { display: none; }
+  .colo-editor:not(.colo-paged) .colo-page-break { break-after: page; height: 0; margin: 0; border: none; }
+  .colo-editor .colo-page-break::after { content: none; }
+  .collaboration-carets__caret, .collaboration-carets__label { display: none; }
+  .colo-editor p.is-editor-empty:first-child::before { content: none; }
+  .colo-editor .column-resize-handle, .colo-editor .selectedCell::after { display: none; }
+  .colo-editor .ProseMirror-selectednode { outline: none; }
+}
 
 /* Remote cursors from @tiptap/extension-collaboration-caret (colours are set via element.style). */
 .collaboration-carets__caret {

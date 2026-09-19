@@ -12,6 +12,7 @@ import {
   ListChecks,
   ListOrdered,
   PanelLeft,
+  Printer,
   Redo2,
   RemoveFormatting,
   Strikethrough,
@@ -72,6 +73,9 @@ export function Toolbar({ editor, zoom, onZoom, outlineOpen, onToggleOutline, li
       </ToolButton>
       <ToolButton label="Redo" shortcut="Mod-Y" disabled={!state.canRedo} onClick={() => chain().redo().run()}>
         <Redo2 />
+      </ToolButton>
+      <ToolButton label="Print" shortcut="Mod-P" onClick={() => window.print()}>
+        <Printer />
       </ToolButton>
       <ZoomMenu zoom={zoom} onZoom={onZoom} />
       <ToolSeparator />

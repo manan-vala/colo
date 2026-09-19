@@ -14,6 +14,7 @@ import { CONTENT_FIELD } from "../../shared/doc-schema";
 import type { Collaboration as CollaborationState } from "../collab/useCollaboration";
 import { DocsFormatting } from "./extensions/docs-shortcuts";
 import { Indent } from "./extensions/indent";
+import { PageBreak, PagedTableView, Pagination } from "./pages";
 
 /** Link protocols the editor accepts; anything else (javascript:, data:, …) is rejected. */
 export const LINK_PROTOCOLS = ["http", "https", "mailto", "tel"];
@@ -52,11 +53,13 @@ export function buildExtensions(collab: CollaborationState): AnyExtension[] {
     TextAlign.configure({ types: ["heading", "paragraph"], alignments: ["left", "center", "right", "justify"] }),
     TaskList,
     TaskItem.configure({ nested: true }),
-    TableKit.configure({ table: { resizable: true, lastColumnResizable: false } }),
+    TableKit.configure({ table: { resizable: true, lastColumnResizable: false, View: PagedTableView } }),
     Subscript,
     Superscript,
     Indent,
     DocsFormatting,
+    PageBreak,
+    Pagination,
     Placeholder.configure({ placeholder: "Start typing…" }),
     Collaboration.configure({ document: collab.doc, field: CONTENT_FIELD }),
     CollaborationCaret.configure({ provider: collab.provider, user: collab.user }),
