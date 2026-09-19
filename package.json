@@ -18,7 +18,8 @@
     "e2e:collab": "node e2e/collab.ts",
     "e2e:gate": "node e2e/gate.ts",
     "e2e:formatting": "node e2e/formatting.ts",
-    "e2e:pages": "node e2e/pages.ts"
+    "e2e:pages": "node e2e/pages.ts",
+    "e2e:comments": "node e2e/comments.ts"
   },
   "dependencies": {
     "@floating-ui/dom": "^1.8.0",
