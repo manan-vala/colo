@@ -77,9 +77,7 @@ export function FontMenu({ editor, fontFamily }: { editor: Editor; fontFamily: s
             <DropdownMenuRadioItem
               key={font.label}
               value={font.family}
-              ref={(element) => {
-                if (element) element.style.fontFamily = font.family;
-              }}
+              style={{ fontFamily: font.family }}
             >
               {font.label}
             </DropdownMenuRadioItem>

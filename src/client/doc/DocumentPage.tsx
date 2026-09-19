@@ -137,10 +137,7 @@ function PresenceAvatars({ people }: { people: Presence[] }) {
           <span
             title={person.isSelf ? `${person.name} (you)` : person.name}
             className="flex size-8 items-center justify-center rounded-full border-2 border-background text-xs font-semibold text-white"
-            ref={(element) => {
-              // CSSOM assignment is allowed by the CSP; inline style attributes are not.
-              if (element) element.style.backgroundColor = person.color;
-            }}
+            style={{ backgroundColor: person.color }}
           >
             {initials(person.name)}
           </span>
