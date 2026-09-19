@@ -40,6 +40,8 @@ export function buildExtensions(collab: CollaborationState): AnyExtension[] {
     StarterKit.configure({
       // Collaboration brings Yjs-aware undo/redo, so Tiptap's own history is disabled.
       undoRedo: false,
+      // The styles menu, outline and CSS offer four levels; pasted h5/h6 become paragraphs.
+      heading: { levels: [1, 2, 3, 4] },
       link: {
         openOnClick: false,
         autolink: true,
