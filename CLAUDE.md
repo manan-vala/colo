@@ -13,9 +13,11 @@ M0–M4 are **built and deployed** to `colo.manan-vala.workers.dev`:
 - Branding: black logo mark (auth screens, document-list header), white favicon variant, home-screen banner image
 - Real pages (M4): page settings in the Yjs `settings` map, our own decoration-only paginator in `src/client/editor/pages/` (ADR 0004 — `tiptap-pagination-plus`/`tiptap-table-plus` are *not* used), page breaks, Page setup dialog, print CSS. Page geometry is computed from settings (`layout.ts`); only content height is measured
 
-**Next up: M5 — comments.** See §11 of the plan for the full milestone table (M6 images/restore points, M7 DOCX import/export, M8 hardening/CI).
+**M5 — comments is built but not deployed** (run `npm run deploy` when ready). `src/client/comments/`: threads in the Yjs `comments` map (`model.ts`), a `comment` mark as the anchor (`comment-mark.ts`), highlights from a generated stylesheet (`highlight.ts`), margin cards placed from the page's own layout (`CommentRail.tsx`, `rail-layout.ts`), a panel for all threads and for narrow screens. `useComments` returns `{ state, actions }`; `state` must not change on ordinary typing and `actions` is stable — keep it that way, or every card re-renders per keystroke.
 
-**Not built yet** — don't assume these exist: DOCX export/import (M7, nothing in `docx`/`mammoth` is installed), images (M6), restore points (M6), comments (M5), `/api/export` backups (M8), Workers Builds CI (M8).
+**Next up: M6 — images and restore points.** See §11 of the plan for the full milestone table (M7 DOCX import/export, M8 hardening/CI).
+
+**Not built yet** — don't assume these exist: DOCX export/import (M7, nothing in `docx`/`mammoth` is installed), images (M6), restore points (M6), `/api/export` backups (M8), Workers Builds CI (M8).
 
 ## Stack
 
@@ -29,7 +31,8 @@ npm test             # Vitest inside workerd (real Durable Objects/SQLite)
 npm run build        # tsc -b, then vite build
 npm run deploy       # build, then wrangler deploy
 npm run cf-typegen   # regenerate worker-configuration.d.ts after editing wrangler.jsonc
-npm run e2e:auth | e2e:collab | e2e:formatting | e2e:pages   # puppeteer + Chrome virtual passkeys, two-browser tests (need a server on :5173)
+npm run e2e:auth | e2e:collab | e2e:formatting | e2e:pages | e2e:comments   # puppeteer + Chrome virtual passkeys, two-browser tests (need a server on :5173)
+npm run e2e:comments-perf   # typing with many comment threads; run against `npm run build && npx vite preview --port 5173`
 COLO_URL=https://… npm run e2e:gate              # deployed-Worker gate (hibernation, reconnect through a redeploy)
 ```
 

@@ -40,6 +40,8 @@ npm run e2e:auth     # invite → passkey → sign out → sign in
 npm run e2e:collab   # two people co-edit a document
 npm run e2e:formatting   # every toolbar and menu action reaches the other browser (M3)
 npm run e2e:pages    # 50-page document, headers/footers, page breaks, print (M4); PDF_PATH=… saves the PDF
+npm run e2e:comments # two people comment, reply, resolve; detached threads; phone panel (M5)
+npm run e2e:comments-perf   # typing with many threads (run against the production build)
 COLO_URL=https://… npm run e2e:gate   # M2 gate on a deployed Worker (hibernation, deploy mid-typing)
 ```
 
@@ -73,4 +75,6 @@ colo/
 
 Colo runs at <https://colo.manan-vala.workers.dev>. **M1 (passkey sign-in), M2 (collaborative documents), M3 (Google Docs-style editor UI) and M4 (real pages) are built and deployed** — menus, toolbar, fonts, colours, links, lists, tables, outline, zoom, plus branding (logo, favicon, home-screen banner).
 
-M4 added A4/Letter pages in portrait or landscape, margins, one-line headers and footers with `{page}` and `{total}` ("Page X of Y"), page breaks (Ctrl/⌘+Enter), tables that split between rows, File → Page setup, Insert → Page numbers, and printing one sheet per page. Narrow screens and pageless documents stay continuous. Next: M5, comments.
+M4 added A4/Letter pages in portrait or landscape, margins, one-line headers and footers with `{page}` and `{total}` ("Page X of Y"), page breaks (Ctrl/⌘+Enter), tables that split between rows, File → Page setup, Insert → Page numbers, and printing one sheet per page. Narrow screens and pageless documents stay continuous.
+
+**M5 (comments) is built, not yet deployed:** select text and add a comment (toolbar, Insert → Comment or Ctrl/⌘+Alt+M); cards sit in the margin beside their text, with replies, editing, resolve and reopen; the Comments button lists open, text-deleted and resolved threads. On phones comments open in a panel. Next: M6, images and restore points.
