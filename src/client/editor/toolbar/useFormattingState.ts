@@ -23,6 +23,8 @@ export interface FormattingState {
   inTable: boolean;
   canUndo: boolean;
   canRedo: boolean;
+  /** Text is selected (commenting needs a selection). */
+  hasSelection: boolean;
 }
 
 /** Everything the toolbar and menus need, recomputed only when it changes. */
@@ -52,6 +54,7 @@ export function useFormattingState(editor: Editor | null): FormattingState | nul
         inTable: e.isActive("table"),
         canUndo: e.can().undo(),
         canRedo: e.can().redo(),
+        hasSelection: !e.state.selection.empty,
       } satisfies FormattingState;
     },
   });

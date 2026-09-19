@@ -1,7 +1,8 @@
 import { ArrowLeft, CloudOff, LoaderCircle } from "lucide-react";
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
 import { DEFAULT_TITLE, SETTINGS_KEYS, SETTINGS_MAP } from "../../shared/doc-schema";
 import { LIMITS, type DocumentSummary, type Member } from "../../shared/protocol";
+import { Avatar } from "@/components/avatar";
 import { Button } from "@/components/ui/button";
 import { ApiRequestError, api } from "../api";
 import { useCollaboration, type Collaboration, type Presence } from "../collab/useCollaboration";
@@ -38,6 +39,13 @@ function OpenDocument(props: { docId: string; member: Member; initialTitle: stri
     if (ended === "session-expired") onSessionEnded();
   }, [ended, onSessionEnded]);
 
+  // Notices are hints ("Select some text…"); they go away by themselves.
+  useEffect(() => {
+    if (!notice) return;
+    const timer = setTimeout(() => setNotice(null), 6000);
+    return () => clearTimeout(timer);
+  }, [notice]);
+
   if (!collab) return <Loading />;
   if (collab.ended === "document-deleted") {
     return <Gone title="This document was deleted" message="Someone deleted it while it was open." />;
@@ -47,7 +55,7 @@ function OpenDocument(props: { docId: string; member: Member; initialTitle: stri
   // socket is back. Unmounting would drop keystrokes and focus.
   if (!collab.everSynced && collab.connection !== "offline") return <Loading />;
 
-  const titleBar = (
+  const renderTitleBar = (actions: ReactNode) => (
     <>
       <div className="flex items-center gap-1 sm:gap-2">
         <Button variant="ghost" size="icon-sm" aria-label="All documents" title="All documents" onClick={() => navigate("/")}>
@@ -58,6 +66,7 @@ function OpenDocument(props: { docId: string; member: Member; initialTitle: stri
           <SaveIndicator collab={collab} />
         </span>
         <div className="ml-auto flex items-center gap-2">
+          {actions}
           <PresenceAvatars people={collab.presence} />
         </div>
       </div>
@@ -69,7 +78,7 @@ function OpenDocument(props: { docId: string; member: Member; initialTitle: stri
     </>
   );
 
-  return <DocumentEditor collab={collab} titleBar={titleBar} onError={setNotice} />;
+  return <DocumentEditor collab={collab} member={props.member} renderTitleBar={renderTitleBar} onError={setNotice} />;
 }
 
 /** The title lives in the Yjs document, so both people see renames as they type. */
@@ -134,26 +143,16 @@ function PresenceAvatars({ people }: { people: Presence[] }) {
     <ul className="flex -space-x-1.5" aria-label="People in this document">
       {people.map((person) => (
         <li key={person.clientId}>
-          <span
+          <Avatar
+            name={person.name}
+            color={person.color}
             title={person.isSelf ? `${person.name} (you)` : person.name}
-            className="flex size-8 items-center justify-center rounded-full border-2 border-background text-xs font-semibold text-white"
-            style={{ backgroundColor: person.color }}
-          >
-            {initials(person.name)}
-          </span>
+            className="border-2 border-background"
+          />
         </li>
       ))}
     </ul>
   );
-}
-
-function initials(name: string): string {
-  return name
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part[0]!.toUpperCase())
-    .join("");
 }
 
 function Loading() {

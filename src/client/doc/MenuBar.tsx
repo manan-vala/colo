@@ -32,6 +32,7 @@ export interface MenuBarProps {
   outlineOpen: boolean;
   onToggleOutline: () => void;
   onInsertLink: () => void;
+  onInsertComment: () => void;
   onPageSetup: () => void;
   pageSettings: PageSettings;
   onPageSettingsChange: (settings: PageSettings) => void;
@@ -73,6 +74,7 @@ export function MenuBar({
   outlineOpen,
   onToggleOutline,
   onInsertLink,
+  onInsertComment,
   onPageSetup,
   pageSettings,
   onPageSettingsChange,
@@ -157,6 +159,9 @@ export function MenuBar({
         <MenubarContent onCloseAutoFocus={keepEditorFocus}>
           <MenubarItem onSelect={onInsertLink}>
             Link <Shortcut keys="Mod-K" />
+          </MenubarItem>
+          <MenubarItem disabled={!state.hasSelection} onSelect={onInsertComment}>
+            Comment <Shortcut keys="Mod-Alt-M" />
           </MenubarItem>
           <MenubarSub>
             <MenubarSubTrigger>Table</MenubarSubTrigger>
