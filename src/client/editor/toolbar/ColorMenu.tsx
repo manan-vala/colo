@@ -44,9 +44,7 @@ export function ColorMenu({ editor, kind, value }: { editor: Editor; kind: Kind;
             <span
               aria-hidden
               className="absolute bottom-1 left-1.5 right-1.5 h-0.5 rounded-full"
-              ref={(element) => {
-                if (element) element.style.backgroundColor = value ?? (kind === "text" ? "#000000" : "transparent");
-              }}
+              style={{ backgroundColor: value ?? (kind === "text" ? "#000000" : "transparent") }}
             />
           </Button>
         </PopoverTrigger>
@@ -66,9 +64,7 @@ export function ColorMenu({ editor, kind, value }: { editor: Editor; kind: Kind;
               aria-label={color}
               title={color}
               className="size-5 rounded-sm ring-1 ring-foreground/15 hover:scale-110 aria-selected:ring-2 aria-selected:ring-primary"
-              ref={(element) => {
-                if (element) element.style.backgroundColor = color;
-              }}
+              style={{ backgroundColor: color }}
               onClick={() => apply(color)}
             />
           ))}

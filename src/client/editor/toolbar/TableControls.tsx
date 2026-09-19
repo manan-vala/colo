@@ -27,9 +27,7 @@ export function TableGridPicker({ onPick }: { onPick: (rows: number, cols: numbe
         role="grid"
         aria-label="Table size"
         className="grid gap-0.5"
-        ref={(element) => {
-          if (element) element.style.gridTemplateColumns = `repeat(${GRID}, 1.1rem)`;
-        }}
+        style={{ gridTemplateColumns: `repeat(${GRID}, 1.1rem)` }}
       >
         {Array.from({ length: GRID * GRID }, (_, index) => {
           const rows = Math.floor(index / GRID) + 1;
