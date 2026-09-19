@@ -308,7 +308,12 @@ export class Auth {
   }
 
   /** Resolves the session cookie; slides the expiry at most once a day. Returns null if not signed in. */
-  async authenticate(cookieHeader: string | null): Promise<Session | null> {
+  /**
+   * The member behind a session cookie. Extends the session at most once a day; callers that
+   * cannot return the re-issued cookie to the browser pass `slide: false`, or the server's
+   * expiry would move while the browser's cookie does not.
+   */
+  async authenticate(cookieHeader: string | null, { slide = true }: { slide?: boolean } = {}): Promise<Session | null> {
     const token = parseCookies(cookieHeader).get(SESSION_COOKIE);
     if (!token || token.length > 128) return null;
     const idHash = await sha256Hex(token);
@@ -325,7 +330,7 @@ export class Auth {
     if (!row) return null;
 
     const session: Session = { member: toMember(row), idHash, expiresAt: row.expires_at };
-    if (Date.parse(now) - Date.parse(row.last_seen_at) >= SESSION_SLIDE_AFTER) {
+    if (slide && Date.parse(now) - Date.parse(row.last_seen_at) >= SESSION_SLIDE_AFTER) {
       session.expiresAt = isoIn(SESSION_TTL);
       this.sql.exec(
         "UPDATE sessions SET expires_at = ?, last_seen_at = ? WHERE id_hash = ?",

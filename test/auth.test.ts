@@ -193,6 +193,30 @@ describe("sessions", () => {
     });
   });
 
+  it("re-issues the cookie on any route that extends the session", async () => {
+    const { cookie, memberId } = await enroll();
+    const backdate = () =>
+      runInDurableObject(workspace(), (_instance, state) => {
+        state.storage.sql.exec("UPDATE sessions SET last_seen_at = ? WHERE member_id = ?", LONG_AGO, memberId);
+      });
+    await backdate();
+    const list = await call("/api/docs", { cookie });
+    expect(list.status).toBe(200);
+    expect(list.headers.get("Set-Cookie")).toContain("__Host-colo_session=");
+
+    // Document authorisation cannot return a cookie, so it leaves the session as it was.
+    await backdate();
+    const { id } = (await (await call("/api/docs", { body: {}, cookie })).json()) as { id: string };
+    await backdate();
+    await runInDurableObject(workspace(), async (instance) => {
+      expect((await instance.authorizeDocument(cookie, id)).ok).toBe(true);
+    });
+    await runInDurableObject(workspace(), (_instance, state) => {
+      const row = state.storage.sql.exec<{ last_seen_at: string }>("SELECT last_seen_at FROM sessions WHERE member_id = ?", memberId).one();
+      expect(row.last_seen_at).toBe(LONG_AGO);
+    });
+  });
+
   it("rejects expired sessions", async () => {
     const { cookie, memberId } = await enroll();
     await runInDurableObject(workspace(), (_instance, state) => {

@@ -15,6 +15,9 @@ import { WORKSPACE_MIGRATIONS, migrate } from "./db";
 import { Documents, type DocumentIdentity, type DocumentMeta } from "./documents";
 import { HttpError, errorResponse, json, readJson, safeEqual } from "./http";
 
+/** The cookie to re-issue when a request extended its session. */
+type RenewedCookie = { value: string | null };
+
 /**
  * The single Workspace Durable Object (named "default"): members, passkeys,
  * sessions, invites and the document index (plan §2.1).
@@ -35,14 +38,19 @@ export class Workspace extends DurableObject<Env> {
   }
 
   async fetch(request: Request): Promise<Response> {
+    const renewed: RenewedCookie = { value: null };
+    let response: Response;
     try {
-      return await this.route(request);
+      response = await this.route(request, renewed);
     } catch (error) {
-      return errorResponse(error);
+      response = errorResponse(error);
     }
+    // A session extended while serving this request re-issues its cookie, whatever the route.
+    if (renewed.value && !response.headers.has("Set-Cookie")) response.headers.set("Set-Cookie", renewed.value);
+    return response;
   }
 
-  private async route(request: Request): Promise<Response> {
+  private async route(request: Request, renewed: RenewedCookie): Promise<Response> {
     const { pathname } = new URL(request.url);
     const method = request.method;
     const route = `${method} ${pathname}`;
@@ -54,10 +62,8 @@ export class Workspace extends DurableObject<Env> {
       }
 
       case "GET /api/me": {
-        const session = await this.auth.authenticate(request.headers.get("Cookie"));
-        if (!session) throw new HttpError(401, "UNAUTHORIZED");
-        const body: MeResponse = { member: session.member };
-        return json(body, session.setCookie ? { headers: { "Set-Cookie": session.setCookie } } : {});
+        const session = await this.requireSession(request, renewed);
+        return json({ member: session.member } satisfies MeResponse);
       }
 
       case "POST /api/admin/invites": {
@@ -90,12 +96,12 @@ export class Workspace extends DurableObject<Env> {
       }
 
       case "GET /api/docs": {
-        await this.requireSession(request);
+        await this.requireSession(request, renewed);
         return json({ documents: this.documents.list() } satisfies ListDocumentsResponse);
       }
 
       case "POST /api/docs": {
-        const session = await this.requireSession(request);
+        const session = await this.requireSession(request, renewed);
         const body = await readJson<CreateDocumentRequest>(request);
         return json(await this.documents.create(session.member, body.title), { status: 201 });
       }
@@ -103,7 +109,7 @@ export class Workspace extends DurableObject<Env> {
 
     const docRoute = /^\/api\/docs\/([^/]+)$/.exec(pathname);
     if (docRoute) {
-      const session = await this.requireSession(request);
+      const session = await this.requireSession(request, renewed);
       const id = docRoute[1];
       switch (method) {
         case "GET":
@@ -125,9 +131,10 @@ export class Workspace extends DurableObject<Env> {
     throw new HttpError(404, "NOT_FOUND");
   }
 
-  private async requireSession(request: Request): Promise<Session> {
+  private async requireSession(request: Request, renewed: RenewedCookie): Promise<Session> {
     const session = await this.auth.authenticate(request.headers.get("Cookie"));
     if (!session) throw new HttpError(401, "UNAUTHORIZED");
+    if (session.setCookie) renewed.value = session.setCookie;
     return session;
   }
 
@@ -139,7 +146,8 @@ export class Workspace extends DurableObject<Env> {
     docId: string,
   ): Promise<{ ok: true; identity: DocumentIdentity } | { ok: false; status: number; error: string }> {
     try {
-      const session = await this.auth.authenticate(cookieHeader);
+      // A WebSocket upgrade cannot re-issue the cookie, so it never extends the session.
+      const session = await this.auth.authenticate(cookieHeader, { slide: false });
       if (!session) return { ok: false, status: 401, error: "UNAUTHORIZED" };
       return { ok: true, identity: this.documents.authorize(session.member, session.idHash, session.expiresAt, docId) };
     } catch (error) {
