@@ -71,6 +71,6 @@ colo/
 
 ## Status
 
-Colo runs at <https://colo.manan-vala.workers.dev>. **M1 (passkey sign-in), M2 (collaborative documents) and M3 (Google Docs-style editor UI) are built and deployed** — menus, toolbar, fonts, colours, links, lists, tables, outline, zoom, plus branding (logo, favicon, home-screen banner).
+Colo runs at <https://colo.manan-vala.workers.dev>. **M1 (passkey sign-in), M2 (collaborative documents), M3 (Google Docs-style editor UI) and M4 (real pages) are built and deployed** — menus, toolbar, fonts, colours, links, lists, tables, outline, zoom, plus branding (logo, favicon, home-screen banner).
 
-**M4 (real pages) is built, not yet deployed:** A4/Letter pages in portrait or landscape, margins, one-line headers and footers with `{page}` and `{total}` ("Page X of Y"), page breaks (Ctrl/⌘+Enter), tables that split between rows, File → Page setup, Insert → Page numbers, and printing one sheet per page. Narrow screens and pageless documents stay continuous. Next: M5, comments.
+M4 added A4/Letter pages in portrait or landscape, margins, one-line headers and footers with `{page}` and `{total}` ("Page X of Y"), page breaks (Ctrl/⌘+Enter), tables that split between rows, File → Page setup, Insert → Page numbers, and printing one sheet per page. Narrow screens and pageless documents stay continuous. Next: M5, comments.

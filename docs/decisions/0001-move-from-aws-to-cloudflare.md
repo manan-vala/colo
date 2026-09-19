@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 14 September 2026
-**Supersedes:** the AWS design in `docs/colo-plan.md` Draft v2 (commit `be40456`)
+**Supersedes:** the AWS design in `docs/colo-plan.md` Draft v2 (commit `40b9942`)
 
 ## Context
 

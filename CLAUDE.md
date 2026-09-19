@@ -6,13 +6,12 @@ Colo is a private, browser-based document editor for **two people**, styled like
 
 ## Current status (19 Sep 2026)
 
-M0–M3 are **built and deployed** to `colo.manan-vala.workers.dev`:
+M0–M4 are **built and deployed** to `colo.manan-vala.workers.dev`:
 - Invite-only passkey auth (no passwords)
 - Collaborative documents: per-document Durable Object, Yjs CRDT sync, hibernating WebSockets, live cursors
 - Docs-style editor shell: File/Edit/View/Insert/Format menus, full formatting toolbar, fonts, colors, links, lists, tables, outline panel, zoom
 - Branding: black logo mark (auth screens, document-list header), white favicon variant, home-screen banner image
-
-**M4 — real pages is built but not deployed** (run `npm run deploy` when ready): page settings in the Yjs `settings` map, our own decoration-only paginator in `src/client/editor/pages/` (ADR 0004 — `tiptap-pagination-plus`/`tiptap-table-plus` are *not* used), page breaks, Page setup dialog, print CSS. Page geometry is computed from settings (`layout.ts`); only content height is measured.
+- Real pages (M4): page settings in the Yjs `settings` map, our own decoration-only paginator in `src/client/editor/pages/` (ADR 0004 — `tiptap-pagination-plus`/`tiptap-table-plus` are *not* used), page breaks, Page setup dialog, print CSS. Page geometry is computed from settings (`layout.ts`); only content height is measured
 
 **Next up: M5 — comments.** See §11 of the plan for the full milestone table (M6 images/restore points, M7 DOCX import/export, M8 hardening/CI).
 
@@ -40,7 +39,7 @@ COLO_URL=https://… npm run e2e:gate              # deployed-Worker gate (hiber
 - **UI components** come from shadcn/ui: `npx shadcn@latest add <component>`, not hand-rolled.
 - **Commit style**: `type(Mn): summary` for milestone work (e.g. `feat(M3): …`, `fix(M2): …`), plain `type: summary` otherwise (e.g. this session's `feat: add brand logo/favicon…`). Plan-doc updates are their own `docs:` commits.
 - **No paid third-party services, ever** — stay on Cloudflare's Free plan; if a feature would need one (R2, a paid font CDN, a hosted DOCX/PDF converter), do it client-side or with a self-hosted open-source library instead, and record the trade-off in an ADR if it's a real architectural fork.
-- **No Claude attribution in commits.**
+- **No Claude attribution in commits** — no `Co-Authored-By` or other Claude/Anthropic trailers, even if a tool suggests one. History was rewritten on 19 Sep 2026 to remove the old ones (backup tag `pre-rewrite`).
 - **Cost discipline is a hard constraint, not a preference.** Every design choice in the plan (whole-state debounced saves instead of per-keystroke rows, hibernating sockets, hidden-tab disconnect, per-connection rate/size caps) exists to stay inside the Workers Free daily limits — see §9 of the plan before changing anything touching Durable Object messages, storage rows, or duration.
 - **Two trusted users, not a multi-tenant app.** Every member can read/write every document (D7 in the plan); don't add authorization complexity the plan explicitly deferred.
 - **Pagination is decoration-only.** Never write page-derived data into the Yjs document; pages are computed per browser. Blocks that establish a formatting context (table rows, `hr`, flex list items) need an explicit full width on paged screens, or the browser squeezes them into the zero-width gap beside a margin band (see `index.css`).
