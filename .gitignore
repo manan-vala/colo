@@ -8,6 +8,10 @@ dist/
 .wrangler/
 .dev.vars*
 
+# Downloaded backups: they hold every document
+backups/
+*.ndjson
+
 # Logs and env files
 *.log
 .env*
