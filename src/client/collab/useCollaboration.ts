@@ -20,6 +20,7 @@ export interface Presence {
 }
 
 export interface Collaboration {
+  docId: string;
   doc: Y.Doc;
   provider: YProvider;
   user: { name: string; color: string };
@@ -34,7 +35,7 @@ export interface Collaboration {
   notice: string | null;
 }
 
-type Status = Omit<Collaboration, "doc" | "provider" | "user">;
+type Status = Omit<Collaboration, "docId" | "doc" | "provider" | "user">;
 
 const INITIAL_STATUS: Status = {
   connection: "connecting",
@@ -173,5 +174,5 @@ export function useCollaboration(docId: string, member: Member): Collaboration |
   }, [docId]);
 
   if (!session) return null;
-  return { ...session, user: { name: displayName, color: memberColor(memberId) }, ...status };
+  return { docId, ...session, user: { name: displayName, color: memberColor(memberId) }, ...status };
 }

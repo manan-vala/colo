@@ -33,6 +33,7 @@ export interface MenuBarProps {
   onToggleOutline: () => void;
   onInsertLink: () => void;
   onInsertComment: () => void;
+  onInsertImage: () => void;
   onPageSetup: () => void;
   pageSettings: PageSettings;
   onPageSettingsChange: (settings: PageSettings) => void;
@@ -75,6 +76,7 @@ export function MenuBar({
   onToggleOutline,
   onInsertLink,
   onInsertComment,
+  onInsertImage,
   onPageSetup,
   pageSettings,
   onPageSettingsChange,
@@ -157,6 +159,7 @@ export function MenuBar({
       <MenubarMenu>
         <MenubarTrigger className="px-2 py-0.5 font-normal">Insert</MenubarTrigger>
         <MenubarContent onCloseAutoFocus={keepEditorFocus}>
+          <MenubarItem onSelect={onInsertImage}>Image…</MenubarItem>
           <MenubarItem onSelect={onInsertLink}>
             Link <Shortcut keys="Mod-K" />
           </MenubarItem>

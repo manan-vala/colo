@@ -2,6 +2,7 @@ import { env, runInDurableObject } from "cloudflare:test";
 import { exports } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 import { LIMITS, type DocumentSummary, type UploadImageResponse } from "../src/shared/protocol";
+import { fitWithin } from "../src/client/editor/images/size";
 import { sniffImageType } from "../src/worker/images";
 import { ORIGIN, call, enroll } from "./helpers/api";
 
@@ -36,6 +37,15 @@ describe("image signatures", () => {
     for (const type of ["image/webp", "image/png", "image/jpeg", "image/gif"]) expect(sniffImageType(fakeImage(type))).toBe(type);
     expect(sniffImageType(fakeImage("image/svg+xml"))).toBeNull();
     expect(sniffImageType(new Uint8Array([0x89, 0x50]))).toBeNull();
+  });
+});
+
+describe("browser-side scaling", () => {
+  it("scales the longest side down to the limit and never scales up", () => {
+    expect(fitWithin(4000, 3000, 2048)).toEqual({ width: 2048, height: 1536 });
+    expect(fitWithin(1000, 5000, 2048)).toEqual({ width: 410, height: 2048 });
+    expect(fitWithin(800, 600, 2048)).toEqual({ width: 800, height: 600 });
+    expect(fitWithin(10_000, 1, 2048)).toEqual({ width: 2048, height: 1 });
   });
 });
 

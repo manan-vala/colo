@@ -1,3 +1,4 @@
+import { NodeSelection } from "@tiptap/pm/state";
 import { useEditorState, type Editor } from "@tiptap/react";
 
 export type Alignment = "left" | "center" | "right" | "justify";
@@ -23,7 +24,7 @@ export interface FormattingState {
   inTable: boolean;
   canUndo: boolean;
   canRedo: boolean;
-  /** Text is selected (commenting needs a selection). */
+  /** Text is selected (commenting needs text; a selected image cannot carry a comment). */
   hasSelection: boolean;
 }
 
@@ -54,7 +55,7 @@ export function useFormattingState(editor: Editor | null): FormattingState | nul
         inTable: e.isActive("table"),
         canUndo: e.can().undo(),
         canRedo: e.can().redo(),
-        hasSelection: !e.state.selection.empty,
+        hasSelection: !e.state.selection.empty && !(e.state.selection instanceof NodeSelection),
       } satisfies FormattingState;
     },
   });

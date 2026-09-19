@@ -5,6 +5,7 @@ import {
   AlignLeft,
   AlignRight,
   Bold,
+  ImagePlus,
   IndentDecrease,
   IndentIncrease,
   Italic,
@@ -51,10 +52,11 @@ export interface ToolbarProps {
   linkOpen: boolean;
   onLinkOpenChange: (open: boolean) => void;
   onAddComment: () => void;
+  onInsertImage: () => void;
 }
 
 /** The Google Docs-style formatting toolbar. Scrolls horizontally on narrow screens. */
-export function Toolbar({ editor, zoom, onZoom, outlineOpen, onToggleOutline, linkOpen, onLinkOpenChange, onAddComment }: ToolbarProps) {
+export function Toolbar({ editor, zoom, onZoom, outlineOpen, onToggleOutline, linkOpen, onLinkOpenChange, onAddComment, onInsertImage }: ToolbarProps) {
   const state = useFormattingState(editor);
   if (!state) return null;
   const chain = () => editor.chain().focus();
@@ -105,6 +107,9 @@ export function Toolbar({ editor, zoom, onZoom, outlineOpen, onToggleOutline, li
       <LinkControls editor={editor} active={state.link} open={linkOpen} onOpenChange={onLinkOpenChange} />
       <ToolButton label="Add comment" shortcut="Mod-Alt-M" disabled={!state.hasSelection} onClick={onAddComment}>
         <MessageSquarePlus />
+      </ToolButton>
+      <ToolButton label="Insert image" onClick={onInsertImage}>
+        <ImagePlus />
       </ToolButton>
       <InsertTableButton editor={editor} />
       {state.inTable && <TableActionsMenu editor={editor} />}

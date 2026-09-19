@@ -7,9 +7,10 @@ import {
 } from "@tiptap/y-tiptap";
 
 /**
- * A text range that survives edits from both people while a new comment is being written.
- * ProseMirror positions do not: y-prosemirror applies remote changes by replacing content, so
- * the range is kept as Yjs relative positions and resolved again when the comment is posted.
+ * Positions that survive edits from both people while something is pending: a comment being
+ * written, an image being uploaded. ProseMirror positions do not: y-prosemirror applies remote
+ * changes by replacing content, so positions are kept as Yjs relative positions and resolved
+ * again when they are needed.
  */
 export interface TrackedRange {
   from: unknown;
@@ -18,6 +19,20 @@ export interface TrackedRange {
 
 function binding(state: EditorState): ProsemirrorBinding | null {
   return (ySyncPluginKey.getState(state)?.binding as ProsemirrorBinding | undefined) ?? null;
+}
+
+/** A single position; see `TrackedRange`. */
+export type TrackedPosition = unknown;
+
+export function trackPosition(state: EditorState, pos: number): TrackedPosition | null {
+  const b = binding(state);
+  return b ? absolutePositionToRelativePosition(pos, b.type, b.mapping) : null;
+}
+
+/** The position now, or null if the content around it was deleted. */
+export function resolvePosition(state: EditorState, position: TrackedPosition): number | null {
+  const b = binding(state);
+  return b ? relativePositionToAbsolutePosition(b.doc, b.type, position, b.mapping) : null;
 }
 
 export function trackRange(state: EditorState, from: number, to: number): TrackedRange | null {

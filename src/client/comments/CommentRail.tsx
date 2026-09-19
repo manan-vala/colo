@@ -4,7 +4,7 @@ import type { Thread } from "./model";
 import { NewCommentCard } from "./NewCommentCard";
 import { layoutRail } from "./rail-layout";
 import { ThreadCard } from "./ThreadCard";
-import { resolveRange } from "./tracked-range";
+import { resolveRange } from "../collab/tracked-range";
 import type { CommentsActions, CommentsState } from "./useComments";
 
 /** Width of the comment margin in pixels; the document screen reserves it beside the page. */

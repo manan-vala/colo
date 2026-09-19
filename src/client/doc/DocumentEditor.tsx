@@ -125,7 +125,12 @@ function DocumentScreen({
   };
   useEffect(() => {
     editor.storage.comment.onAddComment = addComment;
+    editor.storage.image.onError = onError;
   });
+
+  // Images: Insert → Image and the toolbar open the file picker; paste and drop go straight in.
+  const imageInput = useRef<HTMLInputElement>(null);
+  const insertImage = () => imageInput.current?.click();
 
   const commentsButton = (
     <Button
@@ -143,6 +148,19 @@ function DocumentScreen({
   return (
     <div className="flex h-svh flex-col bg-[#f9fbfd] print:block print:h-auto print:bg-white">
       <PrintStyles settings={pageSettings} paged={paged} />
+      <input
+        ref={imageInput}
+        type="file"
+        accept="image/*"
+        multiple
+        hidden
+        aria-label="Choose images"
+        onChange={(event) => {
+          const files = [...(event.target.files ?? [])];
+          event.target.value = "";
+          if (files.length > 0) editor.storage.image.insertFiles(files);
+        }}
+      />
       <CommentStyles openIds={comments.anchored.map((thread) => thread.id)} activeId={comments.activeId} />
       <header className="shrink-0 bg-background px-2 pt-2 sm:px-3 print:hidden">
         {renderTitleBar(commentsButton)}
@@ -155,6 +173,7 @@ function DocumentScreen({
             onToggleOutline={toggleOutline}
             onInsertLink={() => onLinkOpenChange(true)}
             onInsertComment={addComment}
+            onInsertImage={insertImage}
             onPageSetup={() => setPageSetupOpen(true)}
             pageSettings={pageSettings}
             onPageSettingsChange={(next) => updatePageSettings(collab.doc, next)}
@@ -172,6 +191,7 @@ function DocumentScreen({
           linkOpen={linkOpen}
           onLinkOpenChange={onLinkOpenChange}
           onAddComment={addComment}
+          onInsertImage={insertImage}
         />
       </div>
 

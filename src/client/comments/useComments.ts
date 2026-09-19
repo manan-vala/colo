@@ -16,7 +16,7 @@ import {
   type Author,
   type Thread,
 } from "./model";
-import { resolveRange, trackRange, type TrackedRange } from "./tracked-range";
+import { resolveRange, trackRange, type TrackedRange } from "../collab/tracked-range";
 
 /** A comment being written: its thread does not exist until it is posted. */
 export interface Draft {

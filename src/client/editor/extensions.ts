@@ -15,6 +15,7 @@ import type { Collaboration as CollaborationState } from "../collab/useCollabora
 import { CommentMark } from "../comments/comment-mark";
 import { DocsFormatting } from "./extensions/docs-shortcuts";
 import { Indent } from "./extensions/indent";
+import { ColoImage } from "./images";
 import { PageBreak, PagedTableView, Pagination } from "./pages";
 
 /** Link protocols the editor accepts; anything else (javascript:, data:, …) is rejected. */
@@ -51,7 +52,8 @@ export function buildExtensions(collab: CollaborationState): AnyExtension[] {
     }),
     TextStyleKit.configure({ lineHeight: false, backgroundColor: false }),
     Highlight.configure({ multicolor: true }),
-    TextAlign.configure({ types: ["heading", "paragraph"], alignments: ["left", "center", "right", "justify"] }),
+    // Images share paragraph alignment, so the alignment buttons work on a selected image.
+    TextAlign.configure({ types: ["heading", "paragraph", "image"], alignments: ["left", "center", "right", "justify"] }),
     TaskList,
     TaskItem.configure({ nested: true }),
     TableKit.configure({ table: { resizable: true, lastColumnResizable: false, View: PagedTableView } }),
@@ -62,6 +64,7 @@ export function buildExtensions(collab: CollaborationState): AnyExtension[] {
     PageBreak,
     Pagination,
     CommentMark,
+    ColoImage.configure({ docId: collab.docId }),
     Placeholder.configure({ placeholder: "Start typing…" }),
     Collaboration.configure({ document: collab.doc, field: CONTENT_FIELD }),
     CollaborationCaret.configure({ provider: collab.provider, user: collab.user }),

@@ -107,10 +107,13 @@ class PaginationView {
   private frame = 0;
   /** How far content ran past the last page when pages were last added for this document state. */
   private lastOverflow: number | null = null;
-  private readonly onFontsLoaded = () => this.schedule();
+  private readonly onLoaded = () => this.schedule();
 
   constructor(private readonly view: EditorView) {
-    document.fonts?.addEventListener("loadingdone", this.onFontsLoaded);
+    document.fonts?.addEventListener("loadingdone", this.onLoaded);
+    // Images reserve their space before they load, but one without a stored size (pasted HTML)
+    // only gets its height then. Load events do not bubble, so listen in the capture phase.
+    view.dom.addEventListener("load", this.onLoaded, true);
     this.schedule();
   }
 
@@ -127,7 +130,8 @@ class PaginationView {
 
   destroy() {
     cancelAnimationFrame(this.frame);
-    document.fonts?.removeEventListener("loadingdone", this.onFontsLoaded);
+    document.fonts?.removeEventListener("loadingdone", this.onLoaded);
+    this.view.dom.removeEventListener("load", this.onLoaded, true);
   }
 
   private schedule() {

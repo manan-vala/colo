@@ -20,7 +20,8 @@
     "e2e:formatting": "node e2e/formatting.ts",
     "e2e:pages": "node e2e/pages.ts",
     "e2e:comments": "node e2e/comments.ts",
-    "e2e:comments-perf": "node e2e/comments-perf.ts"
+    "e2e:comments-perf": "node e2e/comments-perf.ts",
+    "e2e:images": "node e2e/images.ts"
   },
   "dependencies": {
     "@floating-ui/dom": "^1.8.0",
@@ -36,6 +37,7 @@
     "@tiptap/extension-collaboration": "^3.31.3",
     "@tiptap/extension-collaboration-caret": "^3.31.3",
     "@tiptap/extension-highlight": "^3.31.3",
+    "@tiptap/extension-image": "^3.31.3",
     "@tiptap/extension-list": "^3.31.3",
     "@tiptap/extension-subscript": "^3.31.3",
     "@tiptap/extension-superscript": "^3.31.3",
