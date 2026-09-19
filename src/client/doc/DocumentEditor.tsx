@@ -107,7 +107,7 @@ function DocumentScreen({
 
   // Comments: a margin beside the page when it fits, otherwise the comments panel.
   const author = useMemo(() => ({ id: member.id, name: member.displayName }), [member.id, member.displayName]);
-  const comments = useComments(editor, collab.doc, author);
+  const { state: comments, actions: commentActions } = useComments(editor, collab.doc, author);
   const [commentsSheetOpen, setCommentsSheetOpen] = useState(false);
   const canvasRef = useRef<HTMLElement>(null);
   const canvasWidth = useElementWidth(canvasRef);
@@ -117,7 +117,7 @@ function DocumentScreen({
   const openCount = comments.anchored.length + comments.detached.length;
 
   const addComment = () => {
-    if (!comments.start()) {
+    if (!commentActions.start()) {
       onError("Select some text to comment on.");
       return;
     }
@@ -143,7 +143,7 @@ function DocumentScreen({
   return (
     <div className="flex h-svh flex-col bg-[#f9fbfd] print:block print:h-auto print:bg-white">
       <PrintStyles settings={pageSettings} paged={paged} />
-      <CommentStyles openIds={comments.anchored.map((a) => a.thread.id)} activeId={comments.activeId} />
+      <CommentStyles openIds={comments.anchored.map((thread) => thread.id)} activeId={comments.activeId} />
       <header className="shrink-0 bg-background px-2 pt-2 sm:px-3 print:hidden">
         {renderTitleBar(commentsButton)}
         <div className="overflow-x-auto pb-1 pl-9 [scrollbar-width:none]">
@@ -189,7 +189,7 @@ function DocumentScreen({
                 <EditorContent editor={editor} />
               </div>
             </div>
-            {showRail && <CommentRail comments={comments} editor={editor} />}
+            {showRail && <CommentRail state={comments} actions={commentActions} editor={editor} />}
           </div>
         </main>
       </div>
@@ -201,7 +201,7 @@ function DocumentScreen({
         </Button>
       )}
 
-      <CommentsSheet comments={comments} open={commentsSheetOpen} onOpenChange={setCommentsSheetOpen} />
+      <CommentsSheet state={comments} actions={commentActions} open={commentsSheetOpen} onOpenChange={setCommentsSheetOpen} />
       <PageSetupDialog open={pageSetupOpen} onOpenChange={setPageSetupOpen} settings={pageSettings} onApply={applyPageSettings} />
       {!desktop && (
         <Sheet open={outlineSheetOpen} onOpenChange={setOutlineSheetOpen}>

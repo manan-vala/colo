@@ -1,5 +1,5 @@
 import { Check, EllipsisVertical, RotateCcw } from "lucide-react";
-import { useRef, useState } from "react";
+import { memo, useRef, useState } from "react";
 import { memberColor } from "../../shared/protocol";
 import { Avatar } from "@/components/avatar";
 import { Button } from "@/components/ui/button";
@@ -12,25 +12,24 @@ import {
 import { timeAgo } from "../lib/time";
 import { CommentComposer } from "./CommentComposer";
 import { isThreadStart, type Comment, type Thread } from "./model";
-import type { Comments } from "./useComments";
+import type { CommentsActions } from "./useComments";
+
+interface ThreadCardProps {
+  thread: Thread;
+  active: boolean;
+  /** The signed-in member, who may edit and delete their own comments. */
+  authorId: string;
+  actions: CommentsActions;
+  inPanel?: boolean;
+  detached?: boolean;
+}
 
 /**
  * One comment thread: its comments, a reply box when active, and resolve / reopen. In the
  * margin an inactive thread shows only its first comment; the panel shows the quoted text too.
+ * Memoised: typing in the document does not re-render the cards.
  */
-export function ThreadCard({
-  thread,
-  comments,
-  active,
-  inPanel = false,
-  detached = false,
-}: {
-  thread: Thread;
-  comments: Comments;
-  active: boolean;
-  inPanel?: boolean;
-  detached?: boolean;
-}) {
+export const ThreadCard = memo(function ThreadCard({ thread, active, authorId, actions, inPanel = false, detached = false }: ThreadCardProps) {
   const [first, ...replies] = thread.comments;
   const expanded = active || inPanel;
   const shown = expanded ? replies : [];
@@ -42,7 +41,7 @@ export function ThreadCard({
       data-active={active || undefined}
       className="grid cursor-pointer gap-3 rounded-lg border bg-card p-3 text-sm shadow-sm transition-shadow data-[active]:cursor-default data-[active]:shadow-md data-[active]:ring-1 data-[active]:ring-primary/20"
       onClick={() => {
-        if (!active) comments.focus(thread.id);
+        if (!active) actions.focus(thread.id);
       }}
     >
       {(inPanel || detached) && (
@@ -60,7 +59,7 @@ export function ThreadCard({
             size="xs"
             onClick={(event) => {
               event.stopPropagation();
-              comments.reopen(thread.id);
+              actions.reopen(thread.id);
             }}
           >
             <RotateCcw data-icon="inline-start" />
@@ -69,14 +68,14 @@ export function ThreadCard({
         </div>
       )}
 
-      <CommentView thread={thread} comment={first} comments={comments} />
+      <CommentView thread={thread} comment={first} authorId={authorId} actions={actions} />
       {!expanded && replies.length > 0 && (
         <p className="text-xs font-medium text-primary">
           {replies.length} {replies.length === 1 ? "reply" : "replies"}
         </p>
       )}
       {shown.map((comment) => (
-        <CommentView key={comment.id} thread={thread} comment={comment} comments={comments} />
+        <CommentView key={comment.id} thread={thread} comment={comment} authorId={authorId} actions={actions} />
       ))}
 
       {active && !thread.resolved && (
@@ -86,17 +85,17 @@ export function ThreadCard({
           placeholder="Reply"
           submitLabel="Reply"
           collapsed
-          onSubmit={(body) => comments.reply(thread.id, body)}
+          onSubmit={(body) => actions.reply(thread.id, body)}
         />
       )}
     </article>
   );
-}
+});
 
-function CommentView({ thread, comment, comments }: { thread: Thread; comment: Comment; comments: Comments }) {
+function CommentView({ thread, comment, authorId, actions }: { thread: Thread; comment: Comment; authorId: string; actions: CommentsActions }) {
   const [editing, setEditing] = useState(false);
   const editBox = useRef<HTMLTextAreaElement>(null);
-  const own = comment.authorId === comments.author.id;
+  const own = comment.authorId === authorId;
   const start = isThreadStart(thread, comment.id);
 
   return (
@@ -119,7 +118,7 @@ function CommentView({ thread, comment, comments }: { thread: Thread; comment: C
             title="Mark as resolved and hide"
             onClick={(event) => {
               event.stopPropagation();
-              comments.resolve(thread.id);
+              actions.resolve(thread.id);
             }}
           >
             <Check />
@@ -145,7 +144,7 @@ function CommentView({ thread, comment, comments }: { thread: Thread; comment: C
               }}
             >
               <DropdownMenuItem onSelect={() => setEditing(true)}>Edit</DropdownMenuItem>
-              <DropdownMenuItem variant="destructive" onSelect={() => comments.remove(thread.id, comment.id)}>
+              <DropdownMenuItem variant="destructive" onSelect={() => actions.remove(thread.id, comment.id)}>
                 {start ? "Delete thread" : "Delete"}
               </DropdownMenuItem>
             </DropdownMenuContent>
@@ -160,7 +159,7 @@ function CommentView({ thread, comment, comments }: { thread: Thread; comment: C
           initial={comment.body}
           textareaRef={editBox}
           onSubmit={(body) => {
-            const saved = comments.edit(thread.id, comment.id, body);
+            const saved = actions.edit(thread.id, comment.id, body);
             if (saved) setEditing(false);
             return saved;
           }}

@@ -1,7 +1,7 @@
 import type { Editor } from "@tiptap/react";
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type * as Y from "yjs";
-import { findAnchors, threadsAt, type Anchor } from "./anchors";
+import { findAnchors, threadsAt } from "./anchors";
 import {
   addReply,
   createThread,
@@ -25,20 +25,23 @@ export interface Draft {
   range: TrackedRange;
 }
 
+/**
+ * What the comments UI shows. It changes when a thread, the set of anchored threads, the active
+ * thread or the draft changes — not on every keystroke.
+ */
 export interface CommentsState {
   author: Author;
-  threads: Thread[];
-  /** Open threads with text in the document, in document order. */
-  anchored: { thread: Thread; anchor: Anchor }[];
+  /** Open threads with text in the document, in document order (positions come from the DOM). */
+  anchored: Thread[];
   /** Open threads whose text was deleted. */
   detached: Thread[];
   resolved: Thread[];
-  anchors: Map<string, Anchor>;
   activeId: string | null;
   draft: Draft | null;
   error: string | null;
 }
 
+/** Stable for the life of the document screen, so cards can skip re-rendering. */
 export interface CommentsActions {
   /** Starts a comment on the selected text; returns false when nothing is selected. */
   start: () => boolean;
@@ -52,10 +55,7 @@ export interface CommentsActions {
   reopen: (threadId: string) => void;
   /** Makes a thread active and selects its text in the document. */
   focus: (threadId: string) => void;
-  setActive: (threadId: string | null) => void;
 }
-
-export type Comments = CommentsState & CommentsActions;
 
 /** Subscribes to the thread map; the snapshot only changes when a thread changes. */
 function useThreads(doc: Y.Doc): Thread[] {
@@ -77,150 +77,148 @@ function useThreads(doc: Y.Doc): Thread[] {
   return useSyncExternalStore(store.subscribe, store.snapshot);
 }
 
-/** Thread anchors, recomputed at most once a frame after the document changes. */
-function useAnchors(editor: Editor): Anchor[] {
-  const [anchors, setAnchors] = useState(() => findAnchors(editor.state.doc));
+/** IDs of the threads with text in the document, in document order. */
+type AnchorSummary = string[];
+
+function summarizeAnchors(editor: Editor): AnchorSummary {
+  return findAnchors(editor.state.doc).map((anchor) => anchor.threadId);
+}
+
+const sameSummary = (a: AnchorSummary, b: AnchorSummary) => a.length === b.length && a.every((id, i) => id === b[i]);
+
+/**
+ * Which threads have text in the document, in order. Checked at most once a frame after the
+ * document changes; ordinary typing leaves the result (and React) untouched.
+ */
+function useAnchorSummary(editor: Editor): AnchorSummary {
+  const [summary, setSummary] = useState(() => summarizeAnchors(editor));
   useEffect(() => {
     let frame = 0;
-    const onUpdate = ({ transaction }: { transaction: { docChanged: boolean } }) => {
+    const update = () => setSummary((current) => {
+      const next = summarizeAnchors(editor);
+      return sameSummary(current, next) ? current : next;
+    });
+    const onTransaction = ({ transaction }: { transaction: { docChanged: boolean } }) => {
       if (!transaction.docChanged) return;
       cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() => setAnchors(findAnchors(editor.state.doc)));
+      frame = requestAnimationFrame(update);
     };
-    editor.on("transaction", onUpdate);
-    setAnchors(findAnchors(editor.state.doc));
+    editor.on("transaction", onTransaction);
+    update();
     return () => {
       cancelAnimationFrame(frame);
-      editor.off("transaction", onUpdate);
+      editor.off("transaction", onTransaction);
     };
   }, [editor]);
-  return anchors;
+  return summary;
 }
 
 /**
- * Comment threads for one open document (plan F7): what the margin and the comments panel
- * show, and the actions they offer. Threads are shared through Yjs; which thread is active and
- * the comment being written are local to this browser.
+ * Comment threads for one open document (plan F7). Threads are shared through Yjs; which thread
+ * is active and the comment being written are local to this browser.
  */
-export function useComments(editor: Editor, doc: Y.Doc, author: Author): Comments {
+export function useComments(editor: Editor, doc: Y.Doc, author: Author): { state: CommentsState; actions: CommentsActions } {
   const threads = useThreads(doc);
-  const anchorList = useAnchors(editor);
+  const summary = useAnchorSummary(editor);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const anchors = useMemo(() => new Map(anchorList.map((a) => [a.threadId, a])), [anchorList]);
-  const { anchored, detached, resolved } = useMemo(() => {
+  const lists = useMemo(() => {
     const byId = new Map(threads.map((t) => [t.id, t]));
+    const anchoredIds = new Set(summary);
     return {
-      anchored: anchorList.flatMap((anchor) => {
-        const thread = byId.get(anchor.threadId);
-        return thread && !thread.resolved ? [{ thread, anchor }] : [];
+      anchored: summary.flatMap((threadId) => {
+        const thread = byId.get(threadId);
+        return thread && !thread.resolved ? [thread] : [];
       }),
-      detached: threads.filter((t) => !t.resolved && !anchors.has(t.id)),
+      detached: threads.filter((t) => !t.resolved && !anchoredIds.has(t.id)),
       resolved: threads.filter((t) => t.resolved),
     };
-  }, [threads, anchorList, anchors]);
+  }, [threads, summary]);
+
+  // The latest values, for actions that must stay the same object between renders.
+  const latest = useRef({ threads, draft, author });
+  latest.current = { threads, draft, author };
 
   // Moving the cursor into commented text activates its thread, as clicking it does.
-  const openIds = useMemo(() => new Set(anchored.map((a) => a.thread.id)), [anchored]);
+  const openIds = useMemo(() => new Set(lists.anchored.map((thread) => thread.id)), [lists.anchored]);
   useEffect(() => {
     const onSelection = () => {
       const here = threadsAt(editor.state.selection.$from).filter((id) => openIds.has(id));
       setActiveId((current) => {
         if (current && here.includes(current)) return current;
         if (here.length > 0) return here[0];
-        return draft ? draft.threadId : null;
+        return latest.current.draft?.threadId ?? null;
       });
     };
     editor.on("selectionUpdate", onSelection);
     return () => {
       editor.off("selectionUpdate", onSelection);
     };
-  }, [editor, openIds, draft]);
+  }, [editor, openIds]);
 
-  const start = useCallback(() => {
-    const { from, to, empty } = editor.state.selection;
-    if (empty) return false;
-    const range = trackRange(editor.state, from, to);
-    if (!range) return false;
-    const threadId = newId();
-    setDraft({ threadId, range, quote: editor.state.doc.textBetween(from, to, " ") });
-    setActiveId(threadId);
-    setError(null);
-    return true;
-  }, [editor]);
-
-  const post = useCallback(
-    (body: string) => {
-      if (!draft) return false;
-      const range = resolveRange(editor.state, draft.range);
-      if (!range) {
-        setError("The text you selected was deleted.");
-        return false;
-      }
-      if (!createThread(doc, draft.threadId, { quote: draft.quote, body, author })) return false;
-      editor.commands.setComment(draft.threadId, range);
-      setDraft(null);
-      setError(null);
-      return true;
-    },
-    [draft, editor, doc, author],
-  );
-
-  const cancel = useCallback(() => {
-    setDraft(null);
-    setError(null);
-    setActiveId((current) => (current === draft?.threadId ? null : current));
-  }, [draft]);
-
-  const focus = useCallback(
-    (threadId: string) => {
-      setActiveId(threadId);
-      const anchor = findAnchors(editor.state.doc).find((a) => a.threadId === threadId);
-      if (anchor) editor.chain().setTextSelection(anchor.from).scrollIntoView().run();
-    },
-    [editor],
-  );
-
-  const remove = useCallback(
-    (threadId: string, commentId: string) => {
-      const thread = threads.find((t) => t.id === threadId);
-      if (thread && isThreadStart(thread, commentId)) {
-        editor.commands.unsetComment(threadId);
-        deleteThread(doc, threadId);
-      } else {
-        deleteComment(doc, threadId, commentId);
-      }
-    },
-    [threads, editor, doc],
-  );
-
-  return {
-    author,
-    threads,
-    anchored,
-    detached,
-    resolved,
-    anchors,
-    activeId,
-    draft,
-    error,
-    start,
-    post,
-    cancel,
-    reply: useCallback((threadId: string, body: string) => addReply(doc, threadId, author, body), [doc, author]),
-    edit: useCallback((threadId: string, commentId: string, body: string) => editComment(doc, threadId, commentId, body), [doc]),
-    remove,
-    resolve: useCallback(
-      (threadId: string) => {
-        setResolved(doc, threadId, author);
-        setActiveId((current) => (current === threadId ? null : current));
+  const actions = useMemo<CommentsActions>(() => {
+    const me = () => latest.current.author;
+    return {
+      start: () => {
+        const { from, to, empty } = editor.state.selection;
+        if (empty) return false;
+        const range = trackRange(editor.state, from, to);
+        if (!range) return false;
+        const threadId = newId();
+        setDraft({ threadId, range, quote: editor.state.doc.textBetween(from, to, " ") });
+        setActiveId(threadId);
+        setError(null);
+        return true;
       },
-      [doc, author],
-    ),
-    reopen: useCallback((threadId: string) => setResolved(doc, threadId, null), [doc]),
-    focus,
-    setActive: setActiveId,
-  };
+      post: (body) => {
+        const current = latest.current.draft;
+        if (!current) return false;
+        const range = resolveRange(editor.state, current.range);
+        if (!range) {
+          setError("The text you selected was deleted.");
+          return false;
+        }
+        if (!createThread(doc, current.threadId, { quote: current.quote, body, author: me() })) return false;
+        editor.commands.setComment(current.threadId, range);
+        setDraft(null);
+        setError(null);
+        return true;
+      },
+      cancel: () => {
+        const current = latest.current.draft;
+        setDraft(null);
+        setError(null);
+        setActiveId((active) => (active === current?.threadId ? null : active));
+      },
+      reply: (threadId, body) => addReply(doc, threadId, me(), body),
+      edit: (threadId, commentId, body) => editComment(doc, threadId, commentId, body),
+      remove: (threadId, commentId) => {
+        const thread = latest.current.threads.find((t) => t.id === threadId);
+        if (thread && isThreadStart(thread, commentId)) {
+          editor.commands.unsetComment(threadId);
+          deleteThread(doc, threadId);
+        } else {
+          deleteComment(doc, threadId, commentId);
+        }
+      },
+      resolve: (threadId) => {
+        setResolved(doc, threadId, me());
+        setActiveId((active) => (active === threadId ? null : active));
+      },
+      reopen: (threadId) => setResolved(doc, threadId, null),
+      focus: (threadId) => {
+        setActiveId(threadId);
+        const anchor = findAnchors(editor.state.doc).find((a) => a.threadId === threadId);
+        if (anchor) editor.chain().setTextSelection(anchor.from).scrollIntoView().run();
+      },
+    };
+  }, [editor, doc]);
+
+  const state = useMemo<CommentsState>(
+    () => ({ author, ...lists, activeId, draft, error }),
+    [author, lists, activeId, draft, error],
+  );
+  return { state, actions };
 }

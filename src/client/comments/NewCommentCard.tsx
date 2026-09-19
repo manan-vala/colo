@@ -1,11 +1,11 @@
 import { memberColor } from "../../shared/protocol";
 import { Avatar } from "@/components/avatar";
 import { CommentComposer } from "./CommentComposer";
-import type { Comments } from "./useComments";
+import type { CommentsActions, CommentsState } from "./useComments";
 
 /** The card for a comment being written on the selected text (not shared until posted). */
-export function NewCommentCard({ comments, showQuote = false }: { comments: Comments; showQuote?: boolean }) {
-  const { draft, author, error } = comments;
+export function NewCommentCard({ state, actions, showQuote = false }: { state: CommentsState; actions: CommentsActions; showQuote?: boolean }) {
+  const { draft, author, error } = state;
   if (!draft) return null;
   return (
     <article
@@ -24,8 +24,8 @@ export function NewCommentCard({ comments, showQuote = false }: { comments: Comm
         placeholder="Comment"
         submitLabel="Comment"
         autoFocus
-        onSubmit={comments.post}
-        onCancel={comments.cancel}
+        onSubmit={actions.post}
+        onCancel={actions.cancel}
       />
       {error && (
         <p role="alert" className="text-xs text-destructive">
