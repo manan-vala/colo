@@ -10,6 +10,8 @@ export default defineConfig({
       },
     }),
   ],
+  // Converter tests import Word fixtures with `?inline` (a base64 data URL).
+  assetsInclude: ["**/*.docx"],
   test: {
     include: ["test/**/*.test.ts"],
     // The first requests in a fresh workerd runtime load the whole Worker bundle.
