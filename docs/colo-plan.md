@@ -1,6 +1,6 @@
 # Colo — Build & Deployment Plan
 
-**Status:** Draft v4.10
+**Status:** Draft v4.11
 **Date:** 19 September 2026
 **Owner:** SWC
 **Platform:** Cloudflare Workers (Free plan)
@@ -28,6 +28,7 @@
 | v4.8 | 19 Sep 2026 | **M4 deployed to production.** Git history rewritten to remove `Co-Authored-By` trailers from three early commits (the project does not credit Claude in commits); only messages changed — every commit keeps its tree, author and dates — so all commit IDs changed and the IDs quoted in this plan and in ADR 0001 were updated. The old history is kept locally under the tag `pre-rewrite` |
 | v4.9 | 19 Sep 2026 | **M5 built** (commits `0d39e67`…`3db4226`), not yet deployed. Each comment is a `Y.Map` inside the thread's `comments` array (not a plain object), so edits, deletes and resolves merge field by field; names are stored with IDs (`createdByName`, `authorName`) because there is no member-list API. Anchoring marks are added and removed outside undo history, and pasted content drops them. Highlights come from a generated stylesheet of open threads, so resolving never touches the text. A comment being written keeps its range as Yjs relative positions. Margin cards need 272 px beside the page; without room (phones, narrow windows) comments live in a panel. Performance: a first version re-rendered every card on each keystroke (400–600 ms with 100 threads); now margin positions are read from the page once a frame and the cards are memoised — production build, 50-page document: 50 threads ≈ 15 ms, 100 threads ≈ 16 ms per keystroke including frame work (`npm run e2e:comments-perf`), 20 threads ≈ 2 ms. "Restore with restore points" moves to M6, which builds restore points |
 | v4.10 | 19 Sep 2026 | **M6 built** (commits `e758d4b`…`787ac29`), not yet deployed. **Images:** one SQLite row per image (≤ 1 MB fits under the 2 MB row limit), so the planned `image_chunks` table and width/height columns are dropped; 200 MB of images per document. The browser sends images that already fit (≤ 2048 px, ≤ 1 MB, allowed type) untouched, so screenshots stay sharp and GIFs keep their animation; others become WebP (JPEG where the browser cannot encode WebP). Our own node view instead of Tiptap's resizable one, which ignores remote size changes and never commits touch resizes. Alignment is the paragraph `textAlign` attribute. **Restore points:** `unstable_replaceDocument` only rewinds root types the snapshot already had and treats every root as a map, so a comments map created after a point survived a restore; `replaceState` (`src/worker/restore-points.ts`) uses the same UndoManager approach over the fixed `ROOT_TYPES`. An automatic point is the previously saved state, taken before a save at most every 30 minutes, and never of an empty document. `restore_points` gains `created_by_name`. Document routes for images and restore points are authorised by Workspace (`authorizeRequest`, no writes) and served by the Document object. Also fixed: a session extended on a route other than `/api/me` no longer leaves the browser's cookie behind; a late first `/api/me` no longer signs out a member who has just registered (the intermittent e2e sign-in failure); connection notices clear themselves |
+| v4.11 | 19 Sep 2026 | **M6 review** (commits `696ee16`, `318a737`). Ctrl+Alt+M on a selected image no longer starts a comment that could never be anchored (the `comment` mark only applies to text). IDs are now monotonic ULIDs: ones made in the same millisecond used to sort randomly, which made "newest first" and "drop the oldest" unreliable for restore points saved close together. Pruning always keeps the point just saved, so a pre-restore copy survives even when 50 named points exist. Docs brought up to date: stack, repository layout, image nodes in §3.3, image limits in §4.3 and §10 |
 
 Earlier designs remain readable in git history.
 
@@ -229,6 +230,8 @@ CREATE TABLE restore_point_chunks (              -- the Yjs state, chunked like 
 | `settings` (`Y.Map`) | `title`, `pageSize` (`A4` \| `LETTER`), `orientation` (`portrait` \| `landscape`), `margins` (mm), `header` and `footer` (`{ left, right }` plain text with `{page}` / `{total}`), `pagination` on/off. A missing key means the default (A4 portrait, 25.4 mm margins, no header or footer, pages on); malformed values fall back to defaults (`readPageSettings` in `src/shared/doc-schema.ts`) |
 | `comments` (`Y.Map`) | `threadId → Y.Map { quote, createdAt, createdBy, createdByName, resolvedAt, resolvedBy, resolvedByName, comments: Y.Array<Y.Map { id, authorId, authorName, body, createdAt, editedAt, deletedAt }> }`. The first comment starts the thread; deleting it deletes the thread. Deleted replies keep their place with an empty body. Readers skip malformed entries (`src/client/comments/model.ts`) |
 
+Images are block `image` nodes in `content` with `src` (always a Colo path, `/api/docs/<id>/images/<imageId>`), `alt`, `width` and `height` (the displayed size, which also reserves the space before the image loads) and `textAlign`; the bytes live in the Document object's `images` table, never in Yjs.
+
 Comment anchors are a `comment` mark with a `threadId` attribute (overlapping marks allowed; y-prosemirror stores them under hashed attribute names). A thread whose anchor text was deleted is shown as "detached" in the comments panel rather than lost; undoing the deletion re-attaches it.
 
 ### 3.4 Migrations
@@ -283,7 +286,7 @@ The document socket speaks the standard Yjs protocols, as implemented by `y-part
   - Message size ≤ 1 MB (images use HTTP, not Yjs).
   - A token bucket of 30 messages per second with bursts of 600; the counter lives in the socket attachment so it survives hibernation. Exceeding it closes the socket (code 4008) so the client reconnects and re-syncs instead of silently losing an edit.
   - Document state ≤ 25 MB; beyond that the document becomes read-only with a `DOCUMENT_TOO_LARGE` notice.
-- **Image validation.** The object checks the file signature matches the declared type and rejects SVG (script risk).
+- **Image validation.** The object checks the file signature matches the declared type and rejects SVG (script risk). One image ≤ 1 MB; ≤ 200 MB of images per document. Pasted HTML keeps only images whose `src` is a Colo image path, so a document never loads third-party images (the CSP's `img-src 'self'` blocks them anyway).
 
 ---
 
@@ -304,10 +307,12 @@ Added in v4: document socket authorisation through Workspace, the `document_sess
 | Framework | React 19 + TypeScript | Matches Tiptap's React bindings |
 | Build tool | Vite 8 + `@cloudflare/vite-plugin` | Runs the Worker and both Durable Object classes in workerd during `npm run dev` |
 | UI components | Tailwind CSS v4 + shadcn/ui (Radix, Nova preset) | Menus, dropdowns, popovers, dialogs, sheets and tooltips for a Docs-style shell |
-| Editor | Tiptap 3 (MIT): StarterKit (links limited to http/https/mailto/tel; Tiptap's own undo/redo disabled), Collaboration, CollaborationCaret, TextStyleKit (font family, size, colour), Highlight (multicolour), TextAlign, TaskList/TaskItem, TableKit (resizable, with Colo's `PagedTableView`), Subscript/Superscript, Placeholder, plus Colo's Indent, DocsFormatting, PageBreak and Pagination extensions. Image arrives in M6 | Headless, so the UI is ours; most widely used Yjs binding; all listed extensions are MIT |
+| Editor | Tiptap 3 (MIT): StarterKit (links limited to http/https/mailto/tel; Tiptap's own undo/redo disabled), Collaboration, CollaborationCaret, TextStyleKit (font family, size, colour), Highlight (multicolour), TextAlign, TaskList/TaskItem, TableKit (resizable, with Colo's `PagedTableView`), Subscript/Superscript, Placeholder, Image (with Colo's own node view), plus Colo's Indent, DocsFormatting, PageBreak and Pagination extensions | Headless, so the UI is ours; most widely used Yjs binding; all listed extensions are MIT |
 | Real pages | Colo's own engine, `src/client/editor/pages/` ([ADR 0004](decisions/0004-own-pagination-engine.md)) | Decoration-only, so safe with Yjs; margin bands are floats placed from computed page geometry; table rows are separate grids so tables split between rows |
 | Collaboration client | `yjs` + `y-partyserver/provider` | Reconnect, resync and awareness handled by the library |
 | Comments | Our code, `src/client/comments/`: `comment` mark + `Y.Map` threads + margin cards and a comments panel | Tiptap Comments is paid |
+| Images | Our code, `src/client/editor/images/`: canvas compression in the browser, upload, a resizable node view | Tiptap's resizable image view ignores the other person's size changes and never commits touch resizes |
+| Restore points | Our code, `src/worker/restore-points.ts` and `src/client/doc/RestorePointsDialog.tsx` | Tiptap's version history is paid |
 | DOCX | `mammoth` (import), `docx` (export), JSZip (page settings) | Open source, browser-side |
 | Auth | `@simplewebauthn/browser` | Passkey prompts |
 | Fonts | Self-hosted via `@fontsource` (OFL): Arimo (shown as Arial), Carlito (Calibri), Caladea (Cambria), Cousine (Courier New), Tinos (Times New Roman); Geist for the UI | No font CDN (CSP, privacy); metric-compatible, so DOCX layout stays close |
@@ -368,10 +373,12 @@ colo/
       main.tsx, App.tsx, auth.ts
       components/ui/        # shadcn/ui components
       home/                 # document list, import
-      doc/                  # document shell: top bar, menus, toolbar, outline, comments panel
-      editor/               # Tiptap setup, extensions (comment mark, image), toolbar
+      doc/                  # document shell: top bar, menus, outline, page setup, restore points, print styles
+      editor/               # Tiptap setup, extensions, toolbar
         pages/              # pagination engine, page break node, paged table view (M4)
-      collab/               # provider, hidden-tab disconnect, save status, page settings
+        images/             # image extension, resizable node view, compression, upload (M6)
+      comments/             # thread model, comment mark, margin cards, comments panel (M5)
+      collab/               # provider, hidden-tab disconnect, save status, page settings, tracked positions
       docx/                 # import (mammoth) and export (docx)
       lib/utils.ts
     worker/
@@ -380,7 +387,9 @@ colo/
       auth.ts               # invites, passkeys, sessions
       documents.ts          # document index, authorisation, revocation fan-out
       document.ts           # Document Durable Object (y-partyserver YServer)
-      storage.ts            # chunked state, pending metadata; later images, restore points
+      storage.ts            # chunked state, pending metadata
+      images.ts             # image upload and serving (M6)
+      restore-points.ts     # restore points, automatic points, replaceState (M6)
       db.ts                 # migrations
     shared/
       protocol.ts           # HTTP types, control events, limits
@@ -388,7 +397,8 @@ colo/
   scripts/
     invite.ts
   e2e/                      # browser tests (puppeteer-core + Chrome virtual passkeys)
-    browser.ts (shared helpers), auth.ts, collab.ts, formatting.ts, pages.ts, gate.ts
+    browser.ts (shared helpers), auth.ts, collab.ts, formatting.ts, pages.ts, comments.ts,
+    comments-perf.ts, images.ts, restore-points.ts, gate.ts
   test/
   docs/
     colo-plan.md
@@ -495,7 +505,7 @@ Assumptions: both people actively type for 3 hours each (about 3 edits per secon
 | Durable Object duration | 13,000 GB-s/day; hibernation-eligible idle objects are not billed | Objects active ~6 h in total at 128 MB ≈ **2,800 GB-s** | ~22% |
 | SQLite rows written | 100,000/day; deletes and `setAlarm()` count | Saves every 2–10 s while editing ≈ 2,200–10,800; deferred metadata (alarm, `pending_meta` write and delete, ≈ 3 per minute of editing) ≈ 1,100; auto restore points, metadata pushes, sessions ≈ 1,500 → **≤ 13,500** | ≤ 14% |
 | SQLite rows read | 5,000,000/day | State reloads after hibernation (~2 rows each), lists, auth → **< 100,000** | < 2% |
-| SQLite storage | 5 GB account; 10 GB per object | Text documents: MBs. Images ≤ 1 MB each. Restore points capped at 50 per document | Low |
+| SQLite storage | 5 GB account; 10 GB per object | Text documents: MBs. Images ≤ 1 MB each, ≤ 200 MB per document. Restore points capped at 50 per document | Low |
 | Workers Logs | 200,000 events/day | A few thousand (WebSocket messages are not request logs) | Low |
 
 **The one real risk is duration.** If hibernation does not work as expected (for example, a timer keeps objects awake), four documents left open all day would use about 44,000 GB-s — over three times the allowance. That is why hibernation is verified on the deployed Worker in M2 before anything else is built on it, and why hidden tabs disconnect.
@@ -518,7 +528,7 @@ Assumptions: both people actively type for 3 hours each (about 3 edits per secon
 - **Sign-in and sessions:** as in v3 — invite-only passkeys, hashed revocable sessions, `SameSite=Strict`, `Origin` checks on state changes and upgrades, admin secret removed after enrolment.
 - **Document access:** every document route is authorised by Workspace; Durable Objects are only reachable through the Worker; the Worker controls the identity header.
 - **Revocation:** logout and member disabling close document sockets across all Document objects.
-- **Browser:** CSP with `script-src 'self'` and `frame-ancestors 'none'`; `style-src` allows inline styles (§6.3). Pasted and imported HTML is parsed through the editor schema, which drops unknown elements and attributes. Header/footer text is escaped. SVG images are rejected.
+- **Browser:** CSP with `script-src 'self'` and `frame-ancestors 'none'`; `style-src` allows inline styles (§6.3). Pasted and imported HTML is parsed through the editor schema, which drops unknown elements and attributes. Header/footer text is escaped. SVG images are rejected, and pasted content keeps only Colo's own images.
 - **Abuse limits:** message, rate and document size caps per connection.
 - **Data:** encrypted at rest by Cloudflare; restore points per document; `/api/export` backups.
 
@@ -542,7 +552,7 @@ Assumptions: both people actively type for 3 hours each (about 3 edits per secon
 | **M3 — Document UI** ✅ built, ✅ deployed | Docs-style shell (title bar, File/Edit/View/Insert/Format menus, toolbar), formatting set (F5), outline, zoom, fonts, save status, mobile layout, CSP change | `npm run e2e:formatting` ✅: every toolbar and menu action reaches the second browser, identical content, no CSP violations, 390px layout without horizontal scroll. Deployed to production 15 Sep 2026 along with logo/favicon/banner branding. **Still pending:** a check on a real phone | Commits `e61a77a`…`a038697`, `5af4efb`, `aba1f32`, `a483747` |
 | **M4 — Real pages** ✅ built, ✅ deployed | Pagination with A4/Letter, margins, headers/footers, page numbers including "Page X of Y", table splitting, page breaks, page setup dialog, print stylesheet | `npm run e2e:pages` ✅ on the production build: 52-page document with tables, no line or row inside a margin band, tables split between rows; keystroke + layout median 4–5 ms, p95 7–9 ms; printed PDF has one sheet per page (sheets checked visually against the screen); a page break reflows the other browser exactly; Letter and pageless modes. Deployed to production 19 Sep 2026. **Still pending:** checks on a real phone and a real printer | Commits `3ecb61a`, `a931937` |
 | **M5 — Comments** ✅ built | Comment mark, thread storage, margin cards, replies, resolve/reopen, detached threads | `npm run e2e:comments` ✅ on the production build: comments, replies, edits and deletes sync live; highlight and card aligned (0 px); overlapping threads; resolve/reopen; detached and re-attached on undo; undo of typing keeps comments; paste does not copy them; a draft survives the other person's edits; no highlights in print; phone panel. Unit tests for the model, anchors, margin layout and highlight CSS. "Restore with restore points" is checked in M6. **Still pending:** deploy | Commits `0d39e67`…`3db4226` |
-| **M6 — Images and restore points** ✅ built | Upload, paste, resize and alignment of images; automatic and named restore points; restore with `pre-restore` copy | `npm run e2e:images` ✅ and `npm run e2e:restore` ✅ on the production build: picked and pasted images reach the other browser; a 4000×3000 paste is stored as WebP, 0.97 MB, 2048×1536; resizing and centring sync; eight images add ~1.5 KB to the shared document and none crosses a page edge; pasted HTML keeps only Colo's images; images print. A restore brings back the text and its comment and removes the newer comment in both browsers, with a notice; Ctrl+Z does not revert it; the pre-restore copy restores the newer version. Unit tests: image API (types, signatures, limits, a 30-image document), `replaceState`, the restore API with two Yjs clients, automatic points and retention. **Known limits:** an image pasted from another document still points at that document; images are never deleted. **Still pending:** deploy | Commits `e758d4b`…`787ac29` |
+| **M6 — Images and restore points** ✅ built | Upload, paste, resize and alignment of images; automatic and named restore points; restore with `pre-restore` copy | `npm run e2e:images` ✅ and `npm run e2e:restore` ✅ on the production build: picked and pasted images reach the other browser; a 4000×3000 paste is stored as WebP, 0.97 MB, 2048×1536; resizing and centring sync; eight images add ~1.5 KB to the shared document and none crosses a page edge; pasted HTML keeps only Colo's images; images print. A restore brings back the text and its comment and removes the newer comment in both browsers, with a notice; Ctrl+Z does not revert it; the pre-restore copy restores the newer version. Unit tests: image API (types, signatures, limits, a 30-image document), `replaceState`, the restore API with two Yjs clients, automatic points, retention and ID order. **Known limits:** an image pasted from another document still points at that document; images are never deleted. **Still pending:** deploy | Commits `e758d4b`…`787ac29`, review fixes `696ee16`, `318a737` |
 | **M7 — DOCX** | Import (content, tables, images, page size, margins) and export (content, tables, images, page settings, headers/footers, page numbers, comments) | Round-trip test documents open correctly in Word and LibreOffice; known losses documented | 2–3 days |
 | **M8 — Hardening** | `/api/export`; PITR check; security review; Workers Builds CI; metrics review; mobile pass | Backup restores to a local instance; CI deploys from `main` | 2 days |
 

@@ -20,6 +20,7 @@ M0–M4 are **built and deployed** to `colo.manan-vala.workers.dev`:
 - Restore points: `src/worker/restore-points.ts` (storage, automatic points, `replaceState`) and `src/client/doc/RestorePointsDialog.tsx`.
 - Image and restore-point routes are authorised by Workspace (`authorizeRequest`) and served by the Document object (`onMemberRequest`).
 - A new top-level Yjs type must be added to `ROOT_TYPES` in `doc-schema.ts`, or restores will not rewind it.
+- IDs from `ulid()` (`src/worker/http.ts`) are monotonic within an isolate; restore points rely on ID order for "newest first".
 
 **Next up: M7 — DOCX import/export.** See §11 of the plan for the full milestone table (M8 hardening/CI).
 
@@ -52,7 +53,7 @@ COLO_URL=https://… npm run e2e:gate              # deployed-Worker gate (hiber
 - **Cost discipline is a hard constraint, not a preference.** Every design choice in the plan (whole-state debounced saves instead of per-keystroke rows, hibernating sockets, hidden-tab disconnect, per-connection rate/size caps) exists to stay inside the Workers Free daily limits — see §9 of the plan before changing anything touching Durable Object messages, storage rows, or duration.
 - **Two trusted users, not a multi-tenant app.** Every member can read/write every document (D7 in the plan); don't add authorization complexity the plan explicitly deferred.
 - **Pagination is decoration-only.** Never write page-derived data into the Yjs document; pages are computed per browser. Blocks that establish a formatting context (table rows, `hr`, flex list items) need an explicit full width on paged screens, or the browser squeezes them into the zero-width gap beside a margin band (see `index.css`).
-- **e2e helpers live in `e2e/browser.ts`** (`enroll`, `press`, `openMenubar`, `chooseMenuItem`, `editorText`); don't copy them into scripts.
+- **e2e helpers live in `e2e/browser.ts`** (`enroll`, `press`, `openMenubar`, `chooseMenuItem`, `editorText`, `selectText`, `EditorElement`); don't copy them into scripts. The suites run in seconds against the production build (`npm run build && npx vite preview --port 5173`) and several times slower against `npm run dev`. A file given to Chrome's file chooser is read lazily, so delete test fixtures only after the upload.
 - When a milestone lands, the established pattern is: bump `docs/colo-plan.md`'s revision-history table (§0) and milestone table (§11) in the same or a following `docs:` commit, and update `README.md`'s Status paragraph.
 
 ## Repo layout

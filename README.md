@@ -65,11 +65,12 @@ colo/
   components.json         # shadcn/ui config
   public/_headers         # security and cache headers for static assets
   src/
-    client/               # React SPA (components/ui = shadcn/ui; editor/pages = pagination)
+    client/               # React SPA (components/ui = shadcn/ui; editor/pages = pagination; editor/images; comments)
     worker/               # Worker router + Workspace and Document Durable Objects
     shared/               # types shared by client and Worker
   scripts/                # admin scripts (M1)
-  test/
+  e2e/                    # two-browser tests (puppeteer + Chrome virtual passkeys)
+  test/                   # Vitest inside workerd
   docs/
 ```
 
