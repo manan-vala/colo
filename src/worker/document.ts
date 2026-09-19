@@ -11,6 +11,7 @@ import {
   type ListRestorePointsResponse,
   type RestoreResponse,
 } from "../shared/protocol";
+import { documentBackup, ndjsonResponse, restoreImage, restoreStateChunk, trimStateChunks } from "./backup";
 import { DOCUMENT_MIGRATIONS, migrate } from "./db";
 import { IDENTITY_HEADER, INTERNAL_HOST, decodeIdentity, type DocumentIdentity } from "./documents";
 import { HttpError, errorResponse, json, readJson } from "./http";
@@ -145,6 +146,37 @@ export class Document extends YServer<Env> {
 
   isReadOnly(): boolean {
     return this.readOnly;
+  }
+
+  /**
+   * Makes restored rows live (plan §8.5). The document is rewound to what SQLite now holds, the
+   * same way a restore point is applied, so anyone connected merges it as an ordinary change.
+   *
+   * The metadata flags are then cleared, and this is the whole point: `replaceState` fires the
+   * update observer installed in `onLoad`, which marks the document edited — and a restored title
+   * also sets `titleChanged`, which makes `pushMeta` push *immediately*. Without this reset the
+   * debounced save that follows would overwrite the `updatedAt` and `updatedBy` the backup just
+   * restored with "now" and nobody. A restore is not an edit.
+   */
+  private commitRestore(): { bytes: number } {
+    const { sql } = this.ctx.storage;
+    const state = readState(sql);
+    if (state) {
+      try {
+        replaceState(this.document, state);
+      } catch {
+        throw new HttpError(400, "INVALID_STATE", "The restored state is not a Yjs update");
+      }
+      this.readOnly = state.byteLength > LIMITS.docStateBytes;
+    }
+    this.lastPointAt = latestPointAt(sql);
+    this.metaDirty = false;
+    this.titleChanged = false;
+    this.lastEditor = null;
+    this.lastEditAt = null;
+    this.persistedMeta = null;
+    clearPendingMeta(sql);
+    return { bytes: state?.byteLength ?? 0 };
   }
 
   /**
@@ -326,8 +358,26 @@ export class Document extends YServer<Env> {
 
   private async onInternalRequest(request: Request, url: URL): Promise<Response> {
     if (request.method !== "POST") throw new HttpError(404, "NOT_FOUND");
+    const { sql } = this.ctx.storage;
     const body = (await request.json()) as Record<string, unknown>;
     switch (url.pathname) {
+      // ---- backup (plan §8.5) ------------------------------------------------
+      case "/export":
+        // Straight from SQLite: exporting must not wake a hibernating document.
+        return ndjsonResponse(documentBackup(sql, this.name));
+
+      case "/restore-state":
+        restoreStateChunk(sql, body);
+        return Response.json({ ok: true });
+
+      case "/restore-image":
+        restoreImage(sql, body);
+        return Response.json({ ok: true });
+
+      case "/restore-commit":
+        trimStateChunks(sql, body.chunks);
+        return Response.json(this.commitRestore());
+
       case "/title": {
         const title = String(body.title ?? "");
         this.document.transact(() => this.document.getMap(SETTINGS_MAP).set(SETTINGS_KEYS.title, title));

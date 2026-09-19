@@ -163,6 +163,103 @@ export interface UploadImageResponse {
   url: string;
 }
 
+// ---- backup (M8) --------------------------------------------------------------------
+
+/**
+ * The backup format written by `GET /api/export` and read by `POST /api/admin/restore`
+ * (plan §8.5): NDJSON, one record per line, so neither side holds a whole workspace in memory.
+ * Bumped whenever a record changes shape; a restore refuses a version it does not know.
+ */
+export const BACKUP_VERSION = 1;
+
+/** Largest NDJSON body one restore request may carry; one record always fits. */
+export const BACKUP_BATCH_BYTES = 4_000_000;
+
+/** The first line of a backup, naming the format and the schema versions it came from. */
+export interface BackupHeader {
+  type: "colo-backup";
+  version: number;
+  createdAt: string;
+  origin: string;
+  schema: { workspace: number; document: number };
+}
+
+/** Passkeys and sessions are deliberately absent: device-bound credential material. */
+export interface BackupMember {
+  type: "member";
+  id: string;
+  email: string;
+  displayName: string;
+  createdAt: string;
+  disabledAt: string | null;
+}
+
+/** One `documents` row, soft-deleted ones included (D8). */
+export interface BackupDocument {
+  type: "document";
+  id: string;
+  title: string;
+  createdAt: string;
+  createdBy: string;
+  updatedAt: string;
+  updatedBy: string;
+  deletedAt: string | null;
+}
+
+/** One `doc_state` row: the Yjs state keeps the chunking it is stored with (≤ 1.9 MB). */
+export interface BackupState {
+  type: "state";
+  doc: string;
+  seq: number;
+  /** base64 of the chunk. */
+  data: string;
+}
+
+export interface BackupImage {
+  type: "image";
+  doc: string;
+  id: string;
+  mime: ImageType;
+  bytes: number;
+  createdAt: string;
+  createdBy: string;
+  /** base64 of the image. */
+  data: string;
+}
+
+/**
+ * Written by the restore side, never by an export: every row of `doc` is in, so the document
+ * object can make them live. `chunks` is how many `doc_state` rows the backup held, so a
+ * restore over an existing document drops the ones beyond it.
+ */
+export interface BackupCommit {
+  type: "commit";
+  doc: string;
+  chunks: number;
+}
+
+/** The last line of a backup. A file without it was truncated: the export failed part-way. */
+export interface BackupEnd {
+  type: "end";
+  documents: number;
+}
+
+export type BackupRecord =
+  | BackupHeader
+  | BackupMember
+  | BackupDocument
+  | BackupState
+  | BackupImage
+  | BackupCommit
+  | BackupEnd;
+
+/** `POST /api/admin/restore` (NDJSON body); `documents` counts documents made live by this batch. */
+export interface RestoreBackupResponse {
+  applied: number;
+  members: number;
+  documents: number;
+}
+
 /** Server → client control events, sent as y-partyserver custom string messages. */
 export type ControlEvent =
   | { type: "saved"; at: string }

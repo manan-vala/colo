@@ -1,17 +1,20 @@
 import { DurableObject } from "cloudflare:workers";
-import type {
-  CreateDocumentRequest,
-  CreateInviteRequest,
-  HealthResponse,
-  ListDocumentsResponse,
-  LoginVerifyRequest,
-  MeResponse,
-  RegisterOptionsRequest,
-  RegisterVerifyRequest,
-  RenameDocumentRequest,
+import {
+  BACKUP_BATCH_BYTES,
+  type CreateDocumentRequest,
+  type CreateInviteRequest,
+  type HealthResponse,
+  type ListDocumentsResponse,
+  type LoginVerifyRequest,
+  type MeResponse,
+  type RegisterOptionsRequest,
+  type RegisterVerifyRequest,
+  type RenameDocumentRequest,
+  type RestoreBackupResponse,
 } from "../shared/protocol";
 import { Auth, clearedSessionCookie, type Session } from "./auth";
-import { WORKSPACE_MIGRATIONS, migrate } from "./db";
+import { applyRecords, ndjsonResponse, parseRecords, workspaceBackup } from "./backup";
+import { DOCUMENT_MIGRATIONS, WORKSPACE_MIGRATIONS, migrate } from "./db";
 import { Documents, type DocumentIdentity, type DocumentMeta } from "./documents";
 import { HttpError, errorResponse, json, readJson, safeEqual } from "./http";
 
@@ -51,7 +54,8 @@ export class Workspace extends DurableObject<Env> {
   }
 
   private async route(request: Request, renewed: RenewedCookie): Promise<Response> {
-    const { pathname } = new URL(request.url);
+    const url = new URL(request.url);
+    const { pathname } = url;
     const method = request.method;
     const route = `${method} ${pathname}`;
 
@@ -105,6 +109,16 @@ export class Workspace extends DurableObject<Env> {
         const body = await readJson<CreateDocumentRequest>(request);
         return json(await this.documents.create(session.member, body.title), { status: 201 });
       }
+
+      case "GET /api/export": {
+        await this.requireSession(request, renewed);
+        return this.exportBackup();
+      }
+
+      case "POST /api/admin/restore": {
+        await this.requireAdmin(request);
+        return json(await this.restoreBackup(request, url.searchParams.get("overwrite") === "1"));
+      }
     }
 
     const docRoute = /^\/api\/docs\/([^/]+)$/.exec(pathname);
@@ -125,7 +139,13 @@ export class Workspace extends DurableObject<Env> {
       throw new HttpError(405, "METHOD_NOT_ALLOWED");
     }
 
-    if (pathname === "/api/health" || pathname.startsWith("/api/auth/") || pathname === "/api/me" || pathname === "/api/docs") {
+    if (
+      pathname === "/api/health" ||
+      pathname.startsWith("/api/auth/") ||
+      pathname === "/api/me" ||
+      pathname === "/api/docs" ||
+      pathname === "/api/export"
+    ) {
       throw new HttpError(405, "METHOD_NOT_ALLOWED");
     }
     throw new HttpError(404, "NOT_FOUND");
@@ -136,6 +156,40 @@ export class Workspace extends DurableObject<Env> {
     if (!session) throw new HttpError(401, "UNAUTHORIZED");
     if (session.setCookie) renewed.value = session.setCookie;
     return session;
+  }
+
+  // ---- backup (plan §8.5) ------------------------------------------------------
+
+  /** Streams the whole workspace as NDJSON; each document's own object adds its records. */
+  private exportBackup(): Response {
+    const day = new Date().toISOString().slice(0, 10);
+    return ndjsonResponse(
+      workspaceBackup(this.ctx.storage.sql, {
+        origin: this.env.ORIGIN,
+        schema: { workspace: this.schemaVersion, document: DOCUMENT_MIGRATIONS.length },
+        fetchDocument: (id) => this.documents.request(id, "export"),
+      }),
+      { "Content-Disposition": `attachment; filename="colo-backup-${day}.ndjson"` },
+    );
+  }
+
+  /** Applies one NDJSON batch from `scripts/restore.ts`; only ever reachable with ADMIN_TOKEN. */
+  private async restoreBackup(request: Request, overwrite: boolean): Promise<RestoreBackupResponse> {
+    const text = await request.text();
+    if (text.length > BACKUP_BATCH_BYTES) throw new HttpError(413, "TOO_LARGE");
+    return applyRecords(parseRecords(text), {
+      storage: this.ctx.storage,
+      schemaVersion: this.schemaVersion,
+      overwrite,
+      toDocument: async (id, action, body) => {
+        const response = await this.documents.request(id, action, body);
+        if (response.ok) return;
+        // The document object does the validating, so its own status and code reach the script
+        // rather than being flattened into one "something went wrong".
+        const failure = (await response.json().catch(() => null)) as { error?: string; message?: string } | null;
+        throw new HttpError(response.status, failure?.error ?? "RESTORE_FAILED", failure?.message);
+      },
+    });
   }
 
   // ---- RPC ---------------------------------------------------------------------

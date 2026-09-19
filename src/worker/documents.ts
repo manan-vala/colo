@@ -206,13 +206,18 @@ export class Documents {
     this.sql.exec("DELETE FROM document_sessions WHERE session_hash NOT IN (SELECT id_hash FROM sessions)");
   }
 
-  private async internal(id: string, action: string, body: unknown): Promise<void> {
+  /** Calls a document's own object and hands back its response; the backup streams one (§8.5). */
+  async request(id: string, action: string, body: unknown = {}): Promise<Response> {
     const stub = this.env.DOCUMENT.getByName(id, { locationHint: "apac" });
-    const response = await stub.fetch(`https://${INTERNAL_HOST}/${action}`, {
+    return stub.fetch(`https://${INTERNAL_HOST}/${action}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
+  }
+
+  private async internal(id: string, action: string, body: unknown): Promise<void> {
+    const response = await this.request(id, action, body);
     if (!response.ok) throw new Error(`Document ${id} ${action} failed: ${response.status}`);
   }
 }

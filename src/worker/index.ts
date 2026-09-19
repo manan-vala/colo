@@ -33,6 +33,13 @@ function jsonError(status: number, error: string): Response {
 const UNSAFE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 /**
+ * The one GET worth protecting from cross-site triggering: it returns every document, every
+ * image and both members' addresses. `SameSite=Strict` already stops the cookie riding along,
+ * so this is a second lock on the same door — but a free one.
+ */
+const ORIGIN_ON_GET = "/api/export";
+
+/**
  * Cross-site request and WebSocket hijacking protection (§4.1): state-changing requests and
  * upgrades must come from Colo's own origin. The admin API is called by a script with a
  * bearer token instead, so it is exempt.
@@ -40,6 +47,7 @@ const UNSAFE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 function hasTrustedOrigin(request: Request, url: URL, env: Env): boolean {
   const needsOrigin =
     (UNSAFE_METHODS.has(request.method) && !url.pathname.startsWith("/api/admin/")) ||
+    url.pathname === ORIGIN_ON_GET ||
     request.headers.get("Upgrade")?.toLowerCase() === "websocket";
   return !needsOrigin || request.headers.get("Origin") === env.ORIGIN;
 }
