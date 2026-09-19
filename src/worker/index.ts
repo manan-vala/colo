@@ -33,13 +33,6 @@ function jsonError(status: number, error: string): Response {
 const UNSAFE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 /**
- * The one GET worth protecting from cross-site triggering: it returns every document, every
- * image and both members' addresses. `SameSite=Strict` already stops the cookie riding along,
- * so this is a second lock on the same door — but a free one.
- */
-const ORIGIN_ON_GET = "/api/export";
-
-/**
  * Cross-site request and WebSocket hijacking protection (§4.1): state-changing requests and
  * upgrades must come from Colo's own origin. The admin API is called by a script with a
  * bearer token instead, so it is exempt.
@@ -47,9 +40,25 @@ const ORIGIN_ON_GET = "/api/export";
 function hasTrustedOrigin(request: Request, url: URL, env: Env): boolean {
   const needsOrigin =
     (UNSAFE_METHODS.has(request.method) && !url.pathname.startsWith("/api/admin/")) ||
-    url.pathname === ORIGIN_ON_GET ||
     request.headers.get("Upgrade")?.toLowerCase() === "websocket";
   return !needsOrigin || request.headers.get("Origin") === env.ORIGIN;
+}
+
+/**
+ * The export is the one GET worth protecting from cross-site triggering: a single request
+ * returns every document, every image and both members' addresses.
+ *
+ * `Origin` is no use here — browsers omit it on same-origin GETs — so this reads `Sec-Fetch-Site`,
+ * which they send on every request and which a page cannot forge. A client that sends neither
+ * (the backup script, curl) is not a browser being steered by someone else's page, so it passes.
+ * CORS and `SameSite=Strict` already stop a cross-site read; this stops it being fetched at all.
+ */
+function isCrossSiteExport(request: Request, url: URL, env: Env): boolean {
+  if (url.pathname !== "/api/export") return false;
+  const site = request.headers.get("Sec-Fetch-Site");
+  const origin = request.headers.get("Origin");
+  if (origin && origin !== env.ORIGIN) return true;
+  return site !== null && site !== "same-origin" && site !== "none";
 }
 
 export default {
@@ -58,6 +67,7 @@ export default {
     // run_worker_first only routes /api/* here; everything else is served by Static Assets.
     if (!url.pathname.startsWith("/api/")) return jsonError(404, "NOT_FOUND");
     if (!hasTrustedOrigin(request, url, env)) return jsonError(403, "BAD_ORIGIN");
+    if (isCrossSiteExport(request, url, env)) return jsonError(403, "BAD_ORIGIN");
 
     const workspace = env.WORKSPACE.getByName("default", { locationHint: "apac" });
 

@@ -48,8 +48,7 @@ async function writeContent(docId: string, cookie: string, text: string) {
 }
 
 async function exportBackup(cookie: string): Promise<{ status: number; text: string; records: BackupRecord[] }> {
-  // `call` only sets Origin for non-GET requests, and the export is the one GET that needs it.
-  const response = await call("/api/export", { cookie, headers: { Origin: ORIGIN } });
+  const response = await call("/api/export", { cookie });
   const text = await response.text();
   const records = text
     .split("\n")
@@ -98,13 +97,19 @@ function backupOf(records: BackupRecord[], docIds: string[]): string {
 }
 
 describe("backup export", () => {
-  it("requires a session, this site's origin, and answers only GET", async () => {
+  it("requires a session, refuses cross-site fetches, and answers only GET", async () => {
     const { cookie } = await enroll();
-    expect((await call("/api/export", { headers: { Origin: ORIGIN } })).status).toBe(401);
-    // Unlike every other GET, an export must carry the Origin header: it returns everything.
-    expect((await call("/api/export", { cookie })).status).toBe(403);
-    expect((await call("/api/export", { cookie, headers: { Origin: "https://evil.example" } })).status).toBe(403);
+    expect((await call("/api/export")).status).toBe(401);
     expect((await call("/api/export", { method: "POST", body: {}, cookie })).status).toBe(405);
+
+    // A browser omits Origin on a same-origin GET, so the export reads Sec-Fetch-Site instead.
+    const fetchSite = (site: string) => call("/api/export", { cookie, headers: { "Sec-Fetch-Site": site } });
+    expect((await fetchSite("same-origin")).status).toBe(200);
+    expect((await fetchSite("cross-site")).status).toBe(403);
+    expect((await fetchSite("same-site")).status).toBe(403);
+    expect((await call("/api/export", { cookie, headers: { Origin: "https://evil.example" } })).status).toBe(403);
+    // A script sends neither header; it is not a browser being steered by someone else's page.
+    expect((await call("/api/export", { cookie })).status).toBe(200);
   });
 
   it("carries the header, members, the document index and each document's state and images", async () => {
