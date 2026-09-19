@@ -14,32 +14,10 @@
  *   SCREENSHOT_DIR=... node e2e/comments.ts
  */
 import type { KeyInput, Page } from "puppeteer-core";
-import { BASE_URL, check, clickButton, editorText, enroll, launch, press } from "./browser.ts";
+import { BASE_URL, check, clickButton, editorText, enroll, launch, press, selectText, type EditorElement } from "./browser.ts";
 
 const SCREENSHOTS = process.env.SCREENSHOT_DIR;
 const TEXT = "The quick brown fox jumps over the lazy dog.";
-
-type EditorElement = HTMLElement & { editor: any };
-
-/** Selects the first occurrence of `text` in the document, like a person dragging over it. */
-async function selectText(page: Page, text: string) {
-  const found = await page.evaluate((needle) => {
-    const editor = (document.querySelector(".colo-editor") as EditorElement).editor;
-    let range: { from: number; to: number } | null = null;
-    // Search whole paragraphs: marks split text into several nodes.
-    editor.state.doc.descendants((node: any, pos: number) => {
-      if (range || !node.isTextblock) return !range;
-      const index = node.textContent.indexOf(needle);
-      if (index >= 0) range = { from: pos + 1 + index, to: pos + 1 + index + needle.length };
-      return false;
-    });
-    if (range) editor.chain().focus().setTextSelection(range).run();
-    return range !== null;
-  }, text);
-  if (!found) throw new Error(`text not found: ${text}`);
-  // Tiptap focuses on the next frame; keys pressed before that would go elsewhere.
-  await page.waitForFunction(() => document.activeElement?.classList.contains("colo-editor"), { timeout: 5_000 });
-}
 
 /** Text covered by each thread's highlight, keyed by thread ID. */
 const highlights = (page: Page) =>

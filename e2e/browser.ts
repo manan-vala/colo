@@ -128,3 +128,26 @@ export const editorText = (page: Page) =>
     copy.querySelectorAll(".collaboration-carets__caret, .colo-pages").forEach((node) => node.remove());
     return copy.textContent?.trim() ?? "";
   });
+
+/** The editor element; Tiptap exposes its editor on it, which tests use to read and set state. */
+export type EditorElement = HTMLElement & { editor: any };
+
+/** Selects the first occurrence of `text` in the document, like a person dragging over it. */
+export async function selectText(page: Page, text: string) {
+  const found = await page.evaluate((needle) => {
+    const editor = (document.querySelector(".colo-editor") as EditorElement).editor;
+    let range: { from: number; to: number } | null = null;
+    // Search whole paragraphs: marks split text into several nodes.
+    editor.state.doc.descendants((node: any, pos: number) => {
+      if (range || !node.isTextblock) return !range;
+      const index = node.textContent.indexOf(needle);
+      if (index >= 0) range = { from: pos + 1 + index, to: pos + 1 + index + needle.length };
+      return false;
+    });
+    if (range) editor.chain().focus().setTextSelection(range).run();
+    return range !== null;
+  }, text);
+  if (!found) throw new Error(`text not found: ${text}`);
+  // Tiptap focuses on the next frame; keys pressed before that would go elsewhere.
+  await page.waitForFunction(() => document.activeElement?.classList.contains("colo-editor"), { timeout: 5_000 });
+}

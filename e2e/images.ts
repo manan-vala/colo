@@ -14,9 +14,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Page } from "puppeteer-core";
-import { BASE_URL, check, clickButton, enroll, launch, press } from "./browser.ts";
-
-type EditorElement = HTMLElement & { editor: any };
+import { BASE_URL, check, clickButton, enroll, launch, press, type EditorElement } from "./browser.ts";
 
 /** The document's images as the editor holds them, in order. */
 const imageNodes = (page: Page) =>
