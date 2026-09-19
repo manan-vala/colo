@@ -22,7 +22,8 @@
     "e2e:comments": "node e2e/comments.ts",
     "e2e:comments-perf": "node e2e/comments-perf.ts",
     "e2e:images": "node e2e/images.ts",
-    "e2e:restore": "node e2e/restore-points.ts"
+    "e2e:restore": "node e2e/restore-points.ts",
+    "e2e:convert": "node e2e/convert.ts"
   },
   "dependencies": {
     "@floating-ui/dom": "^1.8.0",
