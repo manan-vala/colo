@@ -5,6 +5,8 @@ import { CLOSE_CODES, type ControlEvent, type Member, memberColor } from "../../
 
 /** How long a hidden tab stays connected before it disconnects (plan §9.3). */
 export const HIDDEN_DISCONNECT_MS = 5 * 60_000;
+/** How long a passing notice (a reconnect, a restore) stays on screen. */
+const NOTICE_MS = 8000;
 
 export type ConnectionStatus = "connecting" | "connected" | "offline" | "paused";
 export type SaveStatus = "idle" | "saving" | "saved";
@@ -70,6 +72,13 @@ export function useCollaboration(docId: string, member: Member): Collaboration |
 
     let lastLocalEdit = 0;
     let hiddenTimer: ReturnType<typeof setTimeout> | undefined;
+    let noticeTimer: ReturnType<typeof setTimeout> | undefined;
+    /** Shows a notice; unless it is sticky (the document is read-only), it clears itself. */
+    const showNotice = (notice: string, sticky = false) => {
+      clearTimeout(noticeTimer);
+      update({ notice });
+      if (!sticky) noticeTimer = setTimeout(() => update({ notice: null }), NOTICE_MS);
+    };
     let paused = false;
 
     const onStatus = ({ status }: { status: string }) => {
@@ -100,12 +109,8 @@ export function useCollaboration(docId: string, member: Member): Collaboration |
           update({ ended: event.type });
           break;
         case "limit":
-          update({
-            notice:
-              event.code === "DOCUMENT_TOO_LARGE"
-                ? "This document has reached its size limit and is now read-only."
-                : "Connection reset by the server; reconnecting.",
-          });
+          if (event.code === "DOCUMENT_TOO_LARGE") showNotice("This document has reached its size limit and is now read-only.", true);
+          else showNotice("Connection reset by the server; reconnecting.");
           break;
       }
     };
@@ -153,6 +158,7 @@ export function useCollaboration(docId: string, member: Member): Collaboration |
 
     return () => {
       clearTimeout(hiddenTimer);
+      clearTimeout(noticeTimer);
       document.removeEventListener("visibilitychange", onVisibility);
       doc.off("update", onUpdate);
       provider.awareness.off("change", onAwareness);
