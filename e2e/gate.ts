@@ -10,35 +10,17 @@
  * When the script prints "DEPLOY NOW", run `npm run deploy` (or the staging deploy) while it types.
  */
 import type { Page } from "puppeteer-core";
-import { BASE_URL, check, clickButton, createInvite, launch, newUser, waitForText } from "./browser.ts";
+import { BASE_URL, check, clickButton, editorText, enroll, launch } from "./browser.ts";
 
 const IDLE_SECONDS = Number(process.env.IDLE_SECONDS ?? 180);
 const TYPE_THROUGH_DEPLOY_SECONDS = Number(process.env.TYPE_SECONDS ?? 90);
 
 if (BASE_URL.startsWith("http://localhost")) console.warn("Warning: the gate is meant for a deployed Worker.");
 
-async function enroll(browser: Awaited<ReturnType<typeof launch>>, name: string) {
-  const user = await newUser(browser);
-  const stamp = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-  await user.page.goto(createInvite(`gate-${name.toLowerCase()}-${stamp}@example.com`, `Gate ${name}`));
-  await clickButton(user.page, "Create passkey");
-  await waitForText(user.page, "Documents");
-  const cdp = await user.page.createCDPSession();
-  await cdp.send("Emulation.setFocusEmulationEnabled", { enabled: true });
-  return user;
-}
-
-const text = (page: Page) =>
-  page.$eval(".colo-editor", (el) => {
-    const copy = el.cloneNode(true) as HTMLElement;
-    copy.querySelectorAll(".collaboration-carets__caret").forEach((caret) => caret.remove());
-    return copy.textContent?.trim() ?? "";
-  });
-
 async function waitForEqualText(a: Page, b: Page, timeout = 60_000) {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
-    const [ta, tb] = await Promise.all([text(a), text(b)]);
+    const [ta, tb] = await Promise.all([editorText(a), editorText(b)]);
     if (ta === tb) return ta;
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
@@ -48,8 +30,8 @@ async function waitForEqualText(a: Page, b: Page, timeout = 60_000) {
 const browser = await launch();
 try {
   console.log(`M2 gate against ${BASE_URL}`);
-  const alex = await enroll(browser, "Alex");
-  const sam = await enroll(browser, "Sam");
+  const alex = await enroll(browser, "Gate Alex");
+  const sam = await enroll(browser, "Gate Sam");
 
   await clickButton(alex.page, "New document");
   await alex.page.waitForSelector(".colo-editor");
@@ -90,7 +72,7 @@ try {
   await sam.page.reload();
   await sam.page.waitForSelector(".colo-editor");
   await new Promise((resolve) => setTimeout(resolve, 2000));
-  check((await text(sam.page)) === finalText, "the saved document matches after a reload");
+  check((await editorText(sam.page)) === finalText, "the saved document matches after a reload");
   console.log("PASS — now check the Durable Objects duration graph in the dashboard stays near zero while idle.");
 } finally {
   await browser.close();

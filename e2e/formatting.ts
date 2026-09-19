@@ -5,51 +5,10 @@
  *   npm run build && npx vite preview --port 5173
  *   SCREENSHOT_DIR=... node e2e/formatting.ts
  */
-import type { ElementHandle, Page } from "puppeteer-core";
-import { BASE_URL, check, clickButton, createInvite, launch, newUser, waitForText } from "./browser.ts";
+import type { Page } from "puppeteer-core";
+import { BASE_URL, check, chooseMenuItem, clickButton, enroll, launch, openMenubar, press, waitForText } from "./browser.ts";
 
 const SCREENSHOTS = process.env.SCREENSHOT_DIR;
-
-async function enroll(browser: Awaited<ReturnType<typeof launch>>, name: string) {
-  const user = await newUser(browser);
-  const stamp = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-  await user.page.goto(createInvite(`${name.toLowerCase()}-${stamp}@example.com`, name));
-  await clickButton(user.page, "Create passkey");
-  await waitForText(user.page, "Documents");
-  return user;
-}
-
-/** Clicks a control by its accessible label (aria-label). */
-async function press(page: Page, label: string) {
-  const handle = await page.waitForSelector(`[aria-label="${label}"]:not([disabled])`, { visible: true, timeout: 10_000 });
-  await handle!.click();
-}
-
-/** Clicks a Radix menu item by its visible text; for leaf items, waits until the menu has closed. */
-async function chooseMenuItem(page: Page, text: string, { submenu = false } = {}) {
-  const handle = (await page.waitForFunction(
-    (label) =>
-      [...document.querySelectorAll('[role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"]')].find(
-        (item) => item.textContent?.trim().startsWith(label),
-      ),
-    { timeout: 10_000 },
-    text,
-  )) as ElementHandle<Element>;
-  await handle.click();
-  if (!submenu) {
-    await page.waitForFunction(() => !document.querySelector('[role="menu"]'), { timeout: 10_000 });
-    await page.waitForFunction(() => document.activeElement?.closest(".colo-editor"), { timeout: 10_000 }).catch(() => undefined);
-  }
-}
-
-async function openMenubar(page: Page, name: string) {
-  const handle = (await page.waitForFunction(
-    (label) => [...document.querySelectorAll('[role="menubar"] [role="menuitem"]')].find((item) => item.textContent?.trim() === label),
-    { timeout: 10_000 },
-    name,
-  )) as ElementHandle<Element>;
-  await handle.click();
-}
 
 /** Waits until the other browser's editor matches a selector (optionally with some text). */
 async function seen(page: Page, selector: string, description: string, text?: string) {
@@ -60,6 +19,12 @@ async function seen(page: Page, selector: string, description: string, text?: st
     text ?? "",
   );
   check(true, description);
+}
+
+/** Clicks a swatch in one palette; both colour popovers have the same swatches. */
+async function pickColour(page: Page, palette: string, colour: string) {
+  const swatch = await page.waitForSelector(`[role="listbox"][aria-label="${palette}"] [aria-label="${colour}"]`, { visible: true, timeout: 10_000 });
+  await swatch!.click();
 }
 
 async function newLine(page: Page, text: string) {
@@ -118,16 +83,18 @@ try {
   await press(a, "Increase font size");
   await seen(s, 'span[style*="font-size: 12pt"]', "Increase font size (11 → 12 pt)");
   await press(a, "Text colour");
-  await press(a, "#ff0000");
+  await pickColour(a, "Text colour", "#ff0000");
   await seen(s, 'span[style*="color: rgb(255, 0, 0)"], span[style*="color: #ff0000"]', "Text colour → red");
   await press(a, "Highlight colour");
-  await press(a, "#ffff00");
+  await pickColour(a, "Highlight colour", "#ffff00");
   await seen(s, "mark[data-color]", "Highlight colour → yellow");
   await press(a, "Align");
   await chooseMenuItem(a, "Centre align");
   await seen(s, 'p[style*="text-align: center"]', "Align → centre");
 
-  // Clear formatting keeps the text but removes marks and alignment
+  // Clear formatting keeps the text but removes marks and alignment. Yjs merges edits made within
+  // 500 ms into one undo step, so pause as a person would; otherwise undo reverts everything above.
+  await new Promise((resolve) => setTimeout(resolve, 700));
   await selectLine(a);
   await press(a, "Clear formatting");
   const clearedParagraph = () => {

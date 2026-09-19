@@ -5,27 +5,7 @@
  *   node e2e/collab.ts
  */
 import type { Page } from "puppeteer-core";
-import { BASE_URL, check, clickButton, createInvite, launch, newUser, waitForText } from "./browser.ts";
-
-async function enroll(browser: Awaited<ReturnType<typeof launch>>, name: string) {
-  const user = await newUser(browser);
-  const stamp = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-  await user.page.goto(createInvite(`${name.toLowerCase()}-${stamp}@example.com`, name));
-  await clickButton(user.page, "Create passkey");
-  await waitForText(user.page, "Documents");
-  // Pretend every page has focus so both editors publish their cursors while headless.
-  const cdp = await user.page.createCDPSession();
-  await cdp.send("Emulation.setFocusEmulationEnabled", { enabled: true });
-  return { ...user, cdp };
-}
-
-/** Document text without the other person's cursor labels, which render inline. */
-const editorText = (page: Page) =>
-  page.$eval(".colo-editor", (el) => {
-    const copy = el.cloneNode(true) as HTMLElement;
-    copy.querySelectorAll(".collaboration-carets__caret").forEach((caret) => caret.remove());
-    return copy.textContent?.trim() ?? "";
-  });
+import { BASE_URL, check, clickButton, editorText, enroll, launch, waitForText } from "./browser.ts";
 
 async function waitForEditorText(page: Page, expected: string, timeout = 10_000) {
   await page.waitForFunction(

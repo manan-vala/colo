@@ -1,6 +1,6 @@
 /** Shared helpers for browser smoke tests: local Chrome + a virtual passkey authenticator. */
 import { execFileSync } from "node:child_process";
-import puppeteer, { type Browser, type Page } from "puppeteer-core";
+import puppeteer, { type Browser, type ElementHandle, type Page } from "puppeteer-core";
 
 export const BASE_URL = process.env.COLO_URL ?? "http://localhost:5173";
 
@@ -72,3 +72,59 @@ export function check(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(`Check failed: ${message}`);
   console.log(`  ✓ ${message}`);
 }
+
+/**
+ * Invites a new member, registers their passkey in a fresh browser context and waits for the
+ * document list. Focus is emulated so headless editors publish cursors and selections.
+ */
+export async function enroll(browser: Browser, name: string) {
+  const user = await newUser(browser);
+  const stamp = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  await user.page.goto(createInvite(`${name.toLowerCase().replace(/\W+/g, "-")}-${stamp}@example.com`, name));
+  await clickButton(user.page, "Create passkey");
+  await waitForText(user.page, "Documents");
+  const cdp = await user.page.createCDPSession();
+  await cdp.send("Emulation.setFocusEmulationEnabled", { enabled: true });
+  return { ...user, cdp };
+}
+
+/** Clicks a control by its accessible label (aria-label). */
+export async function press(page: Page, label: string) {
+  const handle = await page.waitForSelector(`[aria-label="${label}"]:not([disabled])`, { visible: true, timeout: 10_000 });
+  await handle!.click();
+}
+
+/** Opens a menu in the document's menu bar (File, Edit, …). */
+export async function openMenubar(page: Page, name: string) {
+  const handle = (await page.waitForFunction(
+    (label) => [...document.querySelectorAll('[role="menubar"] [role="menuitem"]')].find((item) => item.textContent?.trim() === label),
+    { timeout: 10_000 },
+    name,
+  )) as ElementHandle<Element>;
+  await handle.click();
+}
+
+/** Clicks a Radix menu item by its visible text; for leaf items, waits until the menu has closed. */
+export async function chooseMenuItem(page: Page, text: string, { submenu = false } = {}) {
+  const handle = (await page.waitForFunction(
+    (label) =>
+      [...document.querySelectorAll('[role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"]')].find(
+        (item) => item.textContent?.trim().startsWith(label),
+      ),
+    { timeout: 10_000 },
+    text,
+  )) as ElementHandle<Element>;
+  await handle.click();
+  if (!submenu) {
+    await page.waitForFunction(() => !document.querySelector('[role="menu"]'), { timeout: 10_000 });
+    await page.waitForFunction(() => document.activeElement?.closest(".colo-editor"), { timeout: 10_000 }).catch(() => undefined);
+  }
+}
+
+/** Document text without the other person's cursor labels, which render inline. */
+export const editorText = (page: Page) =>
+  page.$eval(".colo-editor", (el) => {
+    const copy = el.cloneNode(true) as HTMLElement;
+    copy.querySelectorAll(".collaboration-carets__caret, .colo-pages").forEach((node) => node.remove());
+    return copy.textContent?.trim() ?? "";
+  });
