@@ -1,10 +1,19 @@
-import { FileText, FileUp, LoaderCircle, LogOut, Pencil, Plus, Trash2 } from "lucide-react";
+import { ChevronDown, Download, FileText, FileUp, LoaderCircle, LogOut, Pencil, Plus, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { LIMITS, type DocumentSummary, type ListDocumentsResponse, type Member } from "../../shared/protocol";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import logo from "../assets/logo.svg";
 import { banner } from "./banner";
 import { ApiRequestError, api } from "../api";
+import { downloadBackup } from "../backup";
 import { IMPORT_ACCEPT } from "../convert/formats";
 import { describeImportError, importAsNewDocument } from "../doc/imports";
 import { timeAgo } from "../lib/time";
@@ -16,6 +25,7 @@ export function Home({ member, onSignOut, onSessionEnded }: { member: Member; on
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [backingUp, setBackingUp] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
 
   const handleError = useCallback(
@@ -62,6 +72,20 @@ export function Home({ member, onSignOut, onSessionEnded }: { member: Member; on
     }
   };
 
+  // Every document, image and member as one file (plan §8.5). The browser writes it to disk; the
+  // spinner only covers the session check, since the download itself is out of the page's hands.
+  const backUp = async () => {
+    setBackingUp(true);
+    setError(null);
+    try {
+      await downloadBackup();
+    } catch (err) {
+      handleError(err);
+    } finally {
+      setBackingUp(false);
+    }
+  };
+
   const visible = (documents ?? []).filter((doc) => doc.title.toLowerCase().includes(filter.trim().toLowerCase()));
 
   return (
@@ -71,13 +95,27 @@ export function Home({ member, onSignOut, onSessionEnded }: { member: Member; on
           <img src={logo} alt="" className="size-5" />
           Colo
         </span>
-        <div className="flex items-center gap-3">
-          <span className="hidden text-sm text-muted-foreground sm:inline">{member.displayName}</span>
-          <Button variant="outline" size="sm" onClick={onSignOut}>
-            <LogOut data-icon="inline-start" />
-            Sign out
-          </Button>
-        </div>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" size="sm" aria-label="Account">
+              <span className="max-w-32 truncate">{member.displayName}</span>
+              <ChevronDown data-icon="inline-end" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-56">
+            <DropdownMenuLabel className="truncate font-normal text-muted-foreground">{member.email}</DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={backUp} disabled={backingUp}>
+              {backingUp ? <LoaderCircle className="animate-spin" /> : <Download />}
+              {backingUp ? "Preparing…" : "Download backup"}
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={onSignOut}>
+              <LogOut />
+              Sign out
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </header>
 
       <div className="h-40 w-full overflow-hidden sm:h-48">
