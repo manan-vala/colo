@@ -21,6 +21,39 @@ export const SETTINGS_KEYS = {
 
 export const DEFAULT_TITLE = "Untitled document";
 
+// ---- comments (M5) --------------------------------------------------------------------------
+
+/**
+ * `Y.Map` of comment threads: threadId → `Y.Map` with the fields of `ThreadFields` and a
+ * `comments` `Y.Array` of `Y.Map`s with the fields of `CommentFields`. Threads are anchored to
+ * text by a `comment` mark carrying the thread ID; a thread whose text was deleted is detached.
+ */
+export const COMMENTS_MAP = "comments";
+
+export interface ThreadFields {
+  /** The commented text when the thread was created, for detached threads and the list. */
+  quote: string;
+  createdAt: string;
+  createdBy: string;
+  createdByName: string;
+  resolvedAt: string | null;
+  resolvedBy: string | null;
+  resolvedByName: string | null;
+}
+
+export interface CommentFields {
+  id: string;
+  authorId: string;
+  authorName: string;
+  body: string;
+  createdAt: string;
+  editedAt: string | null;
+  /** Set when the author deletes a reply; the body is cleared. */
+  deletedAt: string | null;
+}
+
+export const COMMENT_LIMITS = { bodyLength: 4000, quoteLength: 200 } as const;
+
 // ---- page setup (M4) ------------------------------------------------------------------------
 
 export type PageSizeName = "A4" | "LETTER";
