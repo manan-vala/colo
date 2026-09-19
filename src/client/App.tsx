@@ -22,10 +22,13 @@ function Routes() {
   const pathname = usePathname();
   const [auth, setAuth] = useState<AuthState>({ status: "loading" });
 
+  // The first check only settles the loading state. Registering on the invite screen can finish
+  // before its answer arrives, and a late "not signed in" must not undo that sign-in.
   useEffect(() => {
+    const settle = (next: AuthState) => setAuth((current) => (current.status === "loading" ? next : current));
     fetchMe()
-      .then((member) => setAuth(member ? { status: "signed-in", member } : { status: "signed-out" }))
-      .catch(() => setAuth({ status: "signed-out" }));
+      .then((member) => settle(member ? { status: "signed-in", member } : { status: "signed-out" }))
+      .catch(() => settle({ status: "signed-out" }));
   }, []);
 
   const onSignedIn = (member: Member) => {
