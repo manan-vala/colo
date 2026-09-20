@@ -62,9 +62,7 @@ function OpenDocument(props: { docId: string; member: Member; initialTitle: stri
           <ArrowLeft />
         </Button>
         <TitleField collab={collab} fallback={props.initialTitle} />
-        <span className="hidden md:inline">
-          <SaveIndicator collab={collab} />
-        </span>
+        <SaveIndicator collab={collab} />
         <div className="ml-auto flex items-center gap-2">
           {actions}
           <PresenceAvatars people={collab.presence} />
@@ -115,6 +113,11 @@ function TitleField({ collab, fallback }: { collab: Collaboration; fallback: str
   );
 }
 
+/**
+ * Save and connection state. Phones go offline far more than laptops, so this is never hidden —
+ * only shortened: the full sentence from `sm` up, a word below it, where the title bar has to
+ * fit a back button, the title, the status and the avatars across 390 px.
+ */
 function SaveIndicator({ collab }: { collab: Collaboration }) {
   const [, tick] = useState(0);
   useEffect(() => {
@@ -123,17 +126,39 @@ function SaveIndicator({ collab }: { collab: Collaboration }) {
   }, []);
 
   let text: string;
-  if (collab.connection === "offline") text = "Offline — changes will sync when reconnected";
-  else if (collab.connection === "paused") text = "Paused while the tab was hidden";
-  else if (collab.connection === "connecting") text = "Connecting…";
-  else if (collab.save === "saving") text = "Saving…";
-  else if (collab.savedAt) text = `All changes saved · ${timeAgo(collab.savedAt)}`;
-  else text = "All changes saved";
+  let short: string;
+  if (collab.connection === "offline") {
+    text = "Offline — changes will sync when reconnected";
+    short = "Offline";
+  } else if (collab.connection === "paused") {
+    text = "Paused while the tab was hidden";
+    short = "Paused";
+  } else if (collab.connection === "connecting") {
+    text = short = "Connecting…";
+  } else if (collab.save === "saving") {
+    text = short = "Saving…";
+  } else {
+    text = collab.savedAt ? `All changes saved · ${timeAgo(collab.savedAt)}` : "All changes saved";
+    short = "Saved";
+  }
 
   return (
-    <span data-testid="save-status" className="flex items-center gap-1.5 text-sm text-muted-foreground" aria-live="polite">
+    <span
+      data-testid="save-status"
+      className="flex shrink-0 items-center gap-1.5 text-sm text-muted-foreground"
+      aria-live="polite"
+      title={text}
+    >
       {collab.connection === "offline" && <CloudOff className="size-4" />}
-      {text}
+      {/* One sentence for assistive tech, whatever the screen is showing; the two visible spans
+          are hidden from it so the status is not announced twice. */}
+      <span className="sr-only">{text}</span>
+      <span aria-hidden="true" className="hidden md:inline">
+        {text}
+      </span>
+      <span aria-hidden="true" className="md:hidden">
+        {short}
+      </span>
     </span>
   );
 }
