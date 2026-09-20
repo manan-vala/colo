@@ -1,6 +1,6 @@
 # Colo — Build & Deployment Plan
 
-**Status:** Draft v4.13
+**Status:** Draft v4.14
 **Date:** 20 September 2026
 **Owner:** SWC
 **Platform:** Cloudflare Workers (Free plan)
@@ -32,6 +32,7 @@
 | v4.12 | 20 Sep 2026 | **M5 and M6 deployed. M7 built** (commits `ca0b81a`…`70e4ccc`), not yet deployed. Import and export, going beyond DOCX to what Google Docs offers within Colo's limits: open Word, Markdown, web page and text files; download Word, PDF (print), web page, Markdown and text. **Our own DOCX reader instead of `mammoth`** ([ADR 0005](decisions/0005-own-docx-reader.md)): mammoth drops fonts, colours, sizes, alignment, headers, footers and page setup by design. The reader (fflate + DOMParser) resolves Word's style inheritance and reads lists, merged table cells, images, links, fields, page setup, header/footer page numbers and comment threads with replies and resolved state; tracked changes are accepted, footnotes become a Notes list, and an import report lists every conversion and loss. `docx` writes exports with Colo's look as Word styles, and the reader leaves formatting equal to that look unmarked, so a document round-trips unchanged. Converters load on first use (a separate ~140 KB gzipped chunk). File → Replace with file saves an `import` restore point first. Also fixed: headings are limited to the four levels the editor offers (pasted h5/h6 showed as unstyled "Normal text") |
 
 | v4.13 | 20 Sep 2026 | **M7 deployed. M8 backups built** (commits `72273f4`…`ea0195a`). The repository is now public at `github.com/manan-vala/colo`. Backup and restore as NDJSON, one record per line (§8.5): the Yjs state keeps the 1.9 MB chunking it is stored with, so neither object holds a whole document in memory, and a trailing `end` record is the only way to tell a complete backup from a truncated one. Images are included — they are SQLite rows, not part of the Yjs state, so a state-only backup would have restored with every image broken. **Document ids are preserved, never reminted**, because an image's `src` embeds its document id. Passkeys and sessions are never exported: bound to the relying party and to a device, so unusable elsewhere, and a liability in a downloaded file. Restore lives behind `requireAdmin`, which 404s while `ADMIN_TOKEN` is unset, so the destructive route does not exist in production. Two things found while building: committing a restore had to reset the document's metadata flags, or the debounced save that follows would stamp every restored document as edited just now (`replaceState` looks like an edit to the update observer, and a restored title pushes immediately); and guarding the export with `Origin` broke the browser, which omits it on same-origin GETs — `Sec-Fetch-Site` is the header for that. Deviation from §4.1: the export is streamed NDJSON rather than one JSON object, and carries images |
+| v4.14 | 20 Sep 2026 | **M8 built** (commits `c84c6ba`…`f86a55a`). Mobile pass: the save and connection status was `hidden md:inline`, so a phone showed nothing at all when it went offline — it is now shortened rather than hidden, with the full sentence kept for screen readers; the table size picker set its preview from `onMouseEnter`, which never fires on a touch screen, so you picked a size blind; image resize handles were 12 px dots, now 44 px to a finger under `@media (pointer: coarse)` with the dot unchanged; safe-area inset on the floating comment button; the 816 px page width is no longer duplicated between JS and CSS. `npm run e2e:mobile` covers it and has teeth — with the old handler the picker check sees 1 cell lit instead of 12. **Security review:** no exploitable finding (the admin restore route needs the token, answers 404 without it, and cannot be reached cross-origin because no CORS preflight is answered; the internal restore actions are unreachable from the public router); two robustness fixes, so a damaged backup says what is wrong instead of failing as a 500. `LICENSE` (all rights reserved) and `SECURITY.md` added now the repo is public, and the `pre-rewrite` tag — the last place the old Claude trailers survived — was deleted. **CI:** `npm run ci` is typecheck → tests → build, in that order because `npm test` does not typecheck; verified from a clean clone with no `.dev.vars`. **PITR:** SQLite-only, 30 days, untestable locally by Cloudflare's own statement, and Free-plan availability still unstated — but `/api/export` means nothing depends on the answer |
 
 Earlier designs remain readable in git history.
 
@@ -514,7 +515,28 @@ Free plan: 3,000 build minutes/month, one concurrent build, 20-minute timeout.
 
 - **Code:** `npx wrangler rollback`; additive migrations keep older code working.
 - **Documents:** restore points inside each document (F9).
-- **Everything:** the `/api/export` backup, below. Durable Object SQLite point-in-time recovery (30 days) may exist on the Free plan — still to verify; until then the backup is the only full copy.
+- **Everything:** the `/api/export` backup, below.
+
+#### Point-in-time recovery — checked in M8, and not depended on
+
+What is now established:
+
+- The API is `getCurrentBookmark()`, `getBookmarkForTime(timestamp)` and `onNextSessionRestoreBookmark(bookmark)` on `DurableObjectStorage`, and it is present in the Workers types this project builds against.
+- It covers **SQLite-backed objects only, 30 days** — Colo's objects qualify.
+- **It cannot be tested locally.** Cloudflare states the PITR API is unsupported in local development because the durable change log is not kept there, and a probe confirms it: `getCurrentBookmark()` returns an all-zero placeholder and `getBookmarkForTime()` throws *"This Durable Object's storage back-end does not implement point-in-time recovery."* That is the documented local behaviour and says nothing about production.
+- **Cloudflare still does not state whether the Free plan includes it.** That was true when §13 was first written and is still true.
+
+To settle it on the deployed Worker, add this to a route temporarily, deploy, call it once, then take it out again:
+
+```ts
+try {
+  return json({ bookmark: await this.ctx.storage.getBookmarkForTime(Date.now() - 60_000) });
+} catch (error) {
+  return json({ pitr: (error as Error).message });
+}
+```
+
+**Colo does not rely on the answer.** The PITR check was on the M8 list because there was no backup at all; now `/api/export` exists, so PITR would be a convenience rather than the only copy. If it turns out to be unavailable, nothing in the recovery story changes — which is the point of having built the backup first. D6 (automated off-site backups) stays open either way.
 
 #### Taking a backup (M8)
 
@@ -584,6 +606,20 @@ Assumptions: both people actively type for 3 hours each (about 3 edits per secon
 7. **Images:** compressed in the browser, 1 MB maximum, served with long private caching.
 8. **Monitoring:** check Workers and Durable Objects metrics weekly during M2–M4 and monthly afterwards; investigate anything above 50% of a daily limit. Optional client-side cursor throttling if awareness traffic turns out higher than estimated.
 
+#### The monthly check (M8)
+
+Dashboard → Workers & Pages → `colo` → Metrics, and Durable Objects → Metrics. Five numbers, against §9.2:
+
+| Watch | Allowance | Estimate | Act when |
+|---|---|---|---|
+| **Durable Objects duration** | 13,000 GB-s/day | ~2,800 | **This is the one real risk.** Over ~6,500 means hibernation is not working as assumed — four tabs left open all day would be ~44,000. Check the `document-load` log lines: an object that logs while nobody is editing is waking when it should not |
+| SQLite rows written | 100,000/day | ≤ 13,500 | Over 50,000. Most likely causes are the save debounce or the metadata throttle misbehaving |
+| Durable Object requests | 100,000/day | ~8,100 | Over 50,000. Incoming WebSocket messages count 20:1 |
+| Worker requests | 100,000/day | ~1,000–2,000 | Over 50,000 |
+| SQLite storage | 5 GB account | MBs plus images | Approaching 1 GB. Images are never deleted (M6 known limit), so this only grows |
+
+Record each reading in the revision history rather than only fixing what is wrong, so there is a trend to read. A backup is cheap insurance before investigating anything here: **Download backup** first.
+
 ---
 
 ## 10. Security posture
@@ -620,7 +656,7 @@ Assumptions: both people actively type for 3 hours each (about 3 edits per secon
 | **M5 — Comments** ✅ built, ✅ deployed | Comment mark, thread storage, margin cards, replies, resolve/reopen, detached threads | `npm run e2e:comments` ✅ on the production build: comments, replies, edits and deletes sync live; highlight and card aligned (0 px); overlapping threads; resolve/reopen; detached and re-attached on undo; undo of typing keeps comments; paste does not copy them; a draft survives the other person's edits; no highlights in print; phone panel. Unit tests for the model, anchors, margin layout and highlight CSS. "Restore with restore points" is checked in M6. Deployed 19–20 Sep 2026 | Commits `0d39e67`…`3db4226` |
 | **M6 — Images and restore points** ✅ built, ✅ deployed | Upload, paste, resize and alignment of images; automatic and named restore points; restore with `pre-restore` copy | `npm run e2e:images` ✅ and `npm run e2e:restore` ✅ on the production build: picked and pasted images reach the other browser; a 4000×3000 paste is stored as WebP, 0.97 MB, 2048×1536; resizing and centring sync; eight images add ~1.5 KB to the shared document and none crosses a page edge; pasted HTML keeps only Colo's images; images print. A restore brings back the text and its comment and removes the newer comment in both browsers, with a notice; Ctrl+Z does not revert it; the pre-restore copy restores the newer version. Unit tests: image API (types, signatures, limits, a 30-image document), `replaceState`, the restore API with two Yjs clients, automatic points, retention and ID order. **Known limits:** an image pasted from another document still points at that document; images are never deleted. Deployed 19–20 Sep 2026 | Commits `e758d4b`…`787ac29`, review fixes `696ee16`, `318a737` |
 | **M7 — Import and export** ✅ built | Import (content, tables, images, page size, margins) and export (content, tables, images, page settings, headers/footers, page numbers, comments); beyond the plan: Markdown, web page and text both ways, PDF via print, replace with file, import report | `npm run e2e:convert` ✅ on the production build: a Word-made file imports with headings, merged cells, image, comment thread with reply, title, Letter landscape and header page numbers in both browsers; its Word export imports back to identical text and opens in Word (checked through COM: table, picture, 3 comments with a reply and a resolved one, header, footer, page setup); Markdown, web page and text downloads; replace with file keeps a restore point. Unit tests: 15 reader tests on the Word fixture and edge cases (field links, unsafe links, equations, EMF, charts, list counting, zip bomb, damaged files), a round trip of every supported feature, Markdown and text. **Known losses** (listed in the import report): line and paragraph spacing, columns, equations, charts and SmartArt, embedded objects, EMF/WMF/TIFF images, first-page/even headers, centred header text; footnotes become a Notes list; tracked changes are accepted; floating images and text boxes go in line. LibreOffice not checked automatically. **Still pending:** deploy | Commits `ca0b81a`…`70e4ccc` |
-| **M8 — Hardening** ◐ in progress | `/api/export`; PITR check; security review; Workers Builds CI; metrics review; mobile pass | **Backups ✅ built:** `npm test` covers the format, the SQL and the refusals, including that no passkey or session can ever be written; `npm run e2e:backup` is the acceptance check — a document with text and an image is exported through the account menu (90 MB reached disk), wrecked, restored with `npm run restore`, and comes back with its image still serving from the same URL, which proves the id survived, and without being counted as an edit. **Still to do:** PITR check, security review, Workers Builds CI, metrics review, mobile pass | 2 days |
+| **M8 — Hardening** ✅ built | `/api/export`; PITR check; security review; Workers Builds CI; metrics review; mobile pass | **Backups:** `npm test` covers the format, the SQL and the refusals, including an allow-list that stops a passkey or session ever being written; `npm run e2e:backup` is the acceptance check — a document with text and an image is exported through the account menu (90 MB reached disk), wrecked, restored with `npm run restore`, and comes back with its image still serving from the same URL, which proves the id survived, and without being counted as an edit. **Mobile:** `npm run e2e:mobile` walks the app at 390×844 with touch; fixed the save/offline status being hidden on phones, the table picker giving no touch feedback, 12 px resize handles and the safe-area inset. **Security review:** no exploitable finding; two robustness fixes; LICENSE and SECURITY.md added for the public repo. **CI:** `npm run ci` verified from a clean clone — the dashboard side is still to connect. **PITR:** answered as far as it can be without deploying a probe (§8.5), and no longer depended on. **Still pending:** connect Workers Builds, deploy, the first metrics reading, and a real-phone check (passkey sign-in especially) | 2 days |
 
 **Total:** about 17–24 working days after M0.
 
@@ -649,7 +685,7 @@ Figures confirmed against Cloudflare documentation in September 2026.
 
 **Workers.** Free: 100,000 requests/day, 10 ms CPU per invocation; exceeding a daily limit makes further operations fail with errors rather than incur charges. Static asset requests are free and unlimited. `_headers` rules do not apply to responses generated by Worker code. Preview URLs are not generated for Workers that implement a Durable Object.
 
-**Durable Objects.** Free plan supports only SQLite-backed objects: 100,000 requests/day, 13,000 GB-s duration/day, 5 million rows read/day, 100,000 rows written/day, 5 GB storage for the account, 10 GB per object, 100 classes per account. Limits reset at 00:00 UTC. Incoming WebSocket messages are billed at 20:1; outgoing messages are free. Objects idle and eligible for hibernation are not billed for duration, even before they are hibernated. Alarms do not count as requests, but each `setAlarm()` counts as a row written; deletes count as rows written; index rows count as additional rows written. Maximum string, BLOB or row size 2 MB; SQL statement 100 KB; 100 columns per table; 100 bound parameters per query. Received WebSocket messages up to 32 MiB; socket attachments up to 16 KiB; CPU per request 30 seconds by default. `PRAGMA user_version` is not authorised (found in M0). SQLite point-in-time recovery covers 30 days (Free-plan availability not stated).
+**Durable Objects.** Free plan supports only SQLite-backed objects: 100,000 requests/day, 13,000 GB-s duration/day, 5 million rows read/day, 100,000 rows written/day, 5 GB storage for the account, 10 GB per object, 100 classes per account. Limits reset at 00:00 UTC. Incoming WebSocket messages are billed at 20:1; outgoing messages are free. Objects idle and eligible for hibernation are not billed for duration, even before they are hibernated. Alarms do not count as requests, but each `setAlarm()` counts as a row written; deletes count as rows written; index rows count as additional rows written. Maximum string, BLOB or row size 2 MB; SQL statement 100 KB; 100 columns per table; 100 bound parameters per query. Received WebSocket messages up to 32 MiB; socket attachments up to 16 KiB; CPU per request 30 seconds by default. `PRAGMA user_version` is not authorised (found in M0). SQLite point-in-time recovery covers 30 days for SQLite-backed objects; **Free-plan availability is still not stated**, and the API cannot be exercised in local development by design (§8.5). Subrequests per invocation are capped (50 on Free), which is the ceiling on how many documents one `/api/export` can fan out to — unverified on the deployed Worker, since local development does not enforce it.
 
 **R2.** Free tier of 10 GB-month storage, 1 million Class A and 10 million Class B operations per month with free egress, but enabling R2 requires adding a payment method — not used by Colo.
 

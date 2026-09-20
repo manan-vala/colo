@@ -29,12 +29,14 @@ M0–M7 are **built and deployed** to `colo.manan-vala.workers.dev`:
 - `defaults.ts`: Colo's text look. The writer uses it for Word styles and the reader omits formatting equal to it; keep it in step with `index.css`.
 - UI: `doc/useFileTransfers.tsx`, `doc/imports.ts`, `doc/ImportReportDialog.tsx`, and the Home "Import file" button.
 
-**M8 — hardening, in progress.** Backups are built (§8.5 of the plan): `src/worker/backup.ts` holds the NDJSON format and both directions, `GET /api/export` streams it from Workspace with each Document object adding its own records, and `POST /api/admin/restore` reads it back — behind `requireAdmin`, so it 404s in production where `ADMIN_TOKEN` is deleted. `scripts/restore.ts` drives it; `src/client/backup.ts` plus the account menu in `Home.tsx` is the download.
+**M8 — hardening, built.** Backups (§8.5 of the plan): `src/worker/backup.ts` holds the NDJSON format and both directions, `GET /api/export` streams it from Workspace with each Document object adding its own records, and `POST /api/admin/restore` reads it back — behind `requireAdmin`, so it 404s in production where `ADMIN_TOKEN` is deleted. `scripts/restore.ts` drives it; `src/client/backup.ts` plus the account menu in `Home.tsx` is the download.
 - **Document ids are preserved on restore, never reminted** — an image's `src` embeds its document id, so reminting would break every image.
 - **Passkeys and sessions are never exported.** If you add a record type, the allow-list in `test/backup.test.ts` is what stops credential material leaking into a downloaded file.
 - **Committing a restore resets the document's metadata flags.** `replaceState` looks like an edit to the observer in `onLoad`, and a restored title pushes immediately, so without the reset every restored document gets stamped as edited just now.
 
-**Not built yet** — don't assume these exist: Workers Builds CI, the PITR check, the security review, the metrics review and the mobile pass (all M8).
+Also in M8: the phone pass (`npm run e2e:mobile`), `npm run ci` as the CI gate (typecheck → tests → build, in that order because `npm test` does not typecheck), `LICENSE` and `SECURITY.md`.
+
+**Not done** — Workers Builds is not connected (dashboard-side, see §8.4), M8 is not deployed, no metrics reading has been taken, and nobody has opened Colo on a real phone.
 
 ## Stack
 
