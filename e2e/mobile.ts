@@ -16,7 +16,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Page } from "puppeteer-core";
-import { BASE_URL, check, clickButton, enroll, launch, press, waitForText } from "./browser.ts";
+import { BASE_URL, check, clickButton, enroll, launch, press, pressTestId, waitForText } from "./browser.ts";
 
 const PHONE = { width: 390, height: 844, isMobile: true, hasTouch: true, deviceScaleFactor: 2 };
 
@@ -45,7 +45,7 @@ try {
   await checkNoOverflow(a, "the document list");
 
   // The account menu carries the address and the backup, and has to open on a phone.
-  await press(a, "Account");
+  await pressTestId(a, "account-menu");
   await a.waitForSelector('[role="menu"]', { visible: true, timeout: 5_000 });
   const items = await a.$$eval('[role="menu"] [role="menuitem"]', (nodes) => nodes.map((node) => node.textContent ?? ""));
   check(
