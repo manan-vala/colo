@@ -106,7 +106,17 @@ try {
   const preview = await a.$eval('[role="grid"][aria-label="Table size"]', (grid) =>
     [...grid.querySelectorAll('[data-selected="true"]')].length,
   );
-  check(preview === 12, `the table picker preview follows a finger (${preview} cells lit for 3×4)`);
+  check(preview === 12, `the table picker preview lights up under a finger (${preview} cells lit for 3×4)`);
+
+  // …and keeps up while the finger moves. A touch pointer is captured by the cell it went down
+  // on, so without releasing that capture the preview stays at 3×4 however far the finger goes.
+  const far = '[role="grid"][aria-label="Table size"] button[aria-label="5 by 6"]';
+  const target = (await (await a.waitForSelector(far, { timeout: 5_000 }))!.boundingBox())!;
+  await a.touchscreen.touchMove(target.x + target.width / 2, target.y + target.height / 2);
+  const dragged = await a.$eval('[role="grid"][aria-label="Table size"]', (grid) =>
+    [...grid.querySelectorAll('[data-selected="true"]')].length,
+  );
+  check(dragged === 30, `the preview follows the finger to another cell (${dragged} cells lit for 5×6)`);
   await a.touchscreen.touchEnd();
 
   await a.waitForSelector(".colo-editor table", { timeout: 10_000 });
@@ -114,7 +124,7 @@ try {
     rows: table.querySelectorAll("tr").length,
     cols: table.querySelectorAll("tr")[0]?.children.length ?? 0,
   }));
-  check(size.rows === 3 && size.cols === 4, `and the tap inserts that table (${size.rows}×${size.cols})`);
+  check(size.rows === 5 && size.cols === 6, `and lifting inserts the size it ended on (${size.rows}×${size.cols})`);
   await checkNoOverflow(a, "a document with a table");
 
   // An image, and a resize handle a finger can actually hit.
