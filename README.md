@@ -27,6 +27,8 @@ Requires Node.js 22+ (`.nvmrc` pins 24).
 npm ci
 npm run dev          # Vite + Worker + Durable Object in workerd: http://localhost:5173
 npm test             # Vitest inside workerd
+npm run typecheck    # tsc -b across every project
+npm run ci           # what Workers Builds runs: typecheck, tests, build
 npm run build        # type-check, then build client and Worker into dist/
 npm run preview      # serve the production build locally (applies public/_headers)
 npm run deploy       # build, then wrangler deploy

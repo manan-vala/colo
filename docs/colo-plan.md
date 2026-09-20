@@ -491,7 +491,24 @@ npx wrangler secret delete ADMIN_TOKEN
 
 ### 8.4 CI/CD (M8)
 
-Private GitHub repository connected to **Workers Builds**: build `npm ci && npm test && npm run build`, deploy `npx wrangler deploy`, production branch `main`.
+GitHub repository (`github.com/manan-vala/colo`, now public) connected to **Workers Builds**. The configuration lives in the Cloudflare dashboard rather than in the repository, so it is written down here:
+
+| Setting | Value |
+|---|---|
+| Repository | `manan-vala/colo` |
+| Production branch | `main` |
+| Build command | `npm ci && npm run ci` |
+| Deploy command | `npx wrangler deploy` |
+| Root directory | `/` |
+| Node version | 24 (`.nvmrc`) |
+
+`npm run ci` is `npm run typecheck && npm test && vite build`. **Order matters:** `npm test` is `vitest run`, which strips types without checking them, so `tsc -b` runs first or a type error surfaces only after a full suite. `vite build` rather than `npm run build`, which would run `tsc -b` a second time.
+
+**`npm ci`, never `npm install`** — npm 11.5 crashes on this project resolving Vite 8's optional peer dependencies.
+
+Verified from a clean clone on 20 Sep 2026: `npm ci` then `npm run ci` passes with no `.dev.vars` present, which is what the build environment will look like. The e2e suites stay out of CI: they need Chrome and a server on port 5173.
+
+Free plan: 3,000 build minutes/month, one concurrent build, 20-minute timeout.
 
 ### 8.5 Rollback and restore
 
