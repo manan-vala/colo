@@ -342,3 +342,22 @@ describe("limits", () => {
     expect(client.events).toContainEqual({ type: "limit", code: "RATE_LIMITED" });
   });
 });
+
+describe("a title the document list cannot take", () => {
+  it("cuts an over-long title instead of stranding the document", async () => {
+    const { cookie } = await enroll();
+    const doc = await createDoc(cookie, "Short");
+    const long = `${"y".repeat(LIMITS.titleLength)} and then some more`;
+
+    const after = await runInDurableObject(documentStub(doc.id), async (instance, state) => {
+      instance.document.getMap(SETTINGS_MAP).set(SETTINGS_KEYS.title, long);
+      await instance.onSave();
+      return { alarm: await state.storage.getAlarm() };
+    });
+
+    // The push went through, so nothing is left pending and no alarm retries it every minute.
+    expect(after.alarm).toBeNull();
+    const listed = await (await call(`/api/docs/${doc.id}`, { cookie })).json<DocumentSummary>();
+    expect(listed.title).toBe("y".repeat(LIMITS.titleLength));
+  });
+});
