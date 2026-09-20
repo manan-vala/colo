@@ -220,6 +220,32 @@ describe("backup restore", () => {
     expect((await restore(JSON.stringify({ type: "nonsense" }))).status).toBe(400);
   });
 
+  it("names what is wrong with a damaged line instead of failing as a server error", async () => {
+    const { cookie } = await enroll();
+    const doc = await newDoc(cookie);
+    const header = JSON.stringify({ type: "colo-backup", version: BACKUP_VERSION, createdAt: "", origin: "", schema: {} });
+    const send = (record: object) => restore([header, JSON.stringify(record)].join("\n"), { overwrite: true });
+
+    const damaged = await send({ type: "state", doc: doc.id, seq: 0, data: "not base64!!" });
+    expect(damaged.status).toBe(400);
+    expect((await damaged.json<{ error: string }>()).error).toBe("INVALID_BACKUP");
+
+    // A document whose author is not in the backup: SQLite does not enforce the key, and the
+    // summary query inner-joins members, so it would otherwise just vanish from the list.
+    const orphan = await send({
+      type: "document",
+      id: doc.id,
+      title: "Orphan",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      createdBy: "01M2Y0000000000000000000AA",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      updatedBy: "01M2Y0000000000000000000AA",
+      deletedAt: null,
+    });
+    expect(orphan.status).toBe(400);
+    expect((await orphan.json<{ message: string }>()).message).toContain("not a member in this backup");
+  });
+
   it("checks restored images the way it checks uploaded ones", async () => {
     const { cookie } = await enroll();
     const doc = await newDoc(cookie);

@@ -220,6 +220,15 @@ const docId = (value: unknown): string => {
   return id;
 };
 
+/** `atob` throws on a damaged line; that is a bad backup, not a server fault. */
+function decodeBase64(value: unknown, field: string): Uint8Array {
+  try {
+    return fromBase64(str(value, field));
+  } catch {
+    throw new HttpError(400, "INVALID_BACKUP", `${field} is not base64`);
+  }
+}
+
 /**
  * Applies one batch of records in file order. Idempotent: every write is an upsert keyed on the
  * id from the backup, so re-running the same file produces the same workspace.
@@ -269,7 +278,15 @@ export async function applyRecords(records: BackupRecord[], ctx: RestoreContext)
         break;
       }
 
-      case "document":
+      case "document": {
+        // SQLite does not enforce the foreign key, and the summary query inner-joins `members`,
+        // so a document whose author is missing would just vanish from the list. Say so instead.
+        const author = (value: unknown, field: string): string => {
+          const id = str(value, field);
+          const known = sql.exec("SELECT 1 FROM members WHERE id = ?", id).toArray().length > 0;
+          if (!known) throw new HttpError(400, "INVALID_BACKUP", `${field} ${id} is not a member in this backup`);
+          return id;
+        };
         sql.exec(
           `INSERT INTO documents (id, title, created_at, created_by, updated_at, updated_by, deleted_at)
              VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -279,13 +296,14 @@ export async function applyRecords(records: BackupRecord[], ctx: RestoreContext)
           docId(record.id),
           str(record.title, "document.title"),
           str(record.createdAt, "document.createdAt"),
-          str(record.createdBy, "document.createdBy"),
+          author(record.createdBy, "document.createdBy"),
           str(record.updatedAt, "document.updatedAt"),
-          str(record.updatedBy, "document.updatedBy"),
+          author(record.updatedBy, "document.updatedBy"),
           nullable(record.deletedAt, "document.deletedAt"),
         );
         documents++;
         break;
+      }
 
       case "state":
         await ctx.toDocument(docId(record.doc), "restore-state", {
@@ -322,7 +340,7 @@ export function restoreStateChunk(sql: SqlStorage, body: Record<string, unknown>
   if (typeof seq !== "number" || !Number.isInteger(seq) || seq < 0) {
     throw new HttpError(400, "INVALID_BACKUP", "state.seq is not an index");
   }
-  const data = fromBase64(str(body.data, "state.data"));
+  const data = decodeBase64(body.data, "state.data");
   if (data.byteLength > STATE_CHUNK_BYTES) throw new HttpError(413, "TOO_LARGE", "A state chunk is over the row limit");
   sql.exec(
     "INSERT INTO doc_state (seq, data) VALUES (?, ?) ON CONFLICT (seq) DO UPDATE SET data = excluded.data",
@@ -335,7 +353,7 @@ export function restoreImage(sql: SqlStorage, body: Partial<BackupImage>): void 
   const id = str(body.id, "image.id");
   if (!isUlid(id)) throw new HttpError(400, "INVALID_BACKUP", "image.id is not an id");
   if (!body.mime || !isImageType(body.mime)) throw new HttpError(400, "INVALID_BACKUP", "image.mime is not a stored type");
-  const data = fromBase64(str(body.data, "image.data"));
+  const data = decodeBase64(body.data, "image.data");
   // A backup is a file off someone's disk, so it gets the checks an upload gets: the bytes must
   // really be the type they claim (SVG and anything else that can carry script stays out), and
   // the size limits still apply.
