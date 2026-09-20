@@ -338,3 +338,80 @@ describe("backup restore", () => {
     expect(after[0].title).toBe("Once");
   });
 });
+
+describe("backup integrity", () => {
+  it("names the line of the file a damaged record is on, blank lines included", async () => {
+    const { cookie } = await enroll();
+    const doc = await newDoc(cookie, "Lines");
+    const text = backupOf((await exportBackup(cookie)).records, [doc.id]);
+    const lines = text.trimEnd().split("\n");
+    // A blank line, then a damaged one: line 3 of the file, but only the 2nd non-blank line.
+    const damaged = [lines[0], "", "{ not json", ...lines.slice(1)].join("\n");
+
+    const response = await restore(damaged, { overwrite: true });
+    expect(response.status).toBe(400);
+    expect((await response.json<{ message: string }>()).message).toBe("Line 3 is not JSON");
+  });
+
+  it("fails a backup of a multi-chunk document that is saved while it streams", async () => {
+    const { cookie } = await enroll();
+    const doc = await newDoc(cookie, "Big");
+    // Two chunks, so the export reads the state with more than one statement.
+    await runInDurableObject(documentStub(doc.id), async (instance) => {
+      instance.document.getXmlFragment(CONTENT_FIELD);
+      const text = new Y.Text();
+      instance.document.getMap("filler").set("text", text);
+      text.insert(0, "x".repeat(STATE_CHUNK_BYTES + 10));
+      await instance.onSave();
+    });
+
+    const torn = await runInDurableObject(documentStub(doc.id), async (instance) => {
+      const response = await instance.fetch(
+        new Request("https://document.internal/export", { method: "POST", body: "{}" }),
+      );
+      const reader = response.body!.getReader();
+      await reader.read(); // the first chunk is out; the document is now mid-export
+      await instance.onSave(); // …and someone's typing gets saved underneath it
+      try {
+        for (;;) if ((await reader.read()).done) break;
+        return null;
+      } catch (error) {
+        return (error as Error).message;
+      }
+    });
+    expect(torn).toContain("was edited while it was being exported");
+  });
+
+  it("keeps the whole-document image cap when restoring", async () => {
+    const { cookie } = await enroll();
+    const doc = await newDoc(cookie, "Full");
+    const image = {
+      type: "image" as const,
+      doc: doc.id,
+      id: "01JBZZZZZZZZZZZZZZZZZZZZZZ",
+      mime: "image/png" as const,
+      bytes: PNG.byteLength,
+      createdAt: new Date().toISOString(),
+      createdBy: "someone",
+      data: btoa(String.fromCharCode(...PNG)),
+    };
+    await runInDurableObject(documentStub(doc.id), (instance, state) => {
+      // A document already at its image quota, without storing 200 MB to get there.
+      state.storage.sql.exec(
+        "INSERT INTO images (id, mime, bytes, data, created_at, created_by) VALUES (?, 'image/png', ?, ?, ?, 'someone')",
+        "01JBYYYYYYYYYYYYYYYYYYYYYY",
+        200_000_000,
+        PNG.buffer,
+        new Date().toISOString(),
+      );
+      void instance;
+    });
+
+    const response = await restore(
+      `${JSON.stringify(image)}\n`,
+      { overwrite: true },
+    );
+    expect(response.status).toBe(413);
+    expect((await response.json<{ error: string }>()).error).toBe("DOCUMENT_IMAGES_FULL");
+  });
+});

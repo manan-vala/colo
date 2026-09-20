@@ -253,7 +253,12 @@ export type BackupRecord =
   | BackupCommit
   | BackupEnd;
 
-/** `POST /api/admin/restore` (NDJSON body); `documents` counts documents made live by this batch. */
+/**
+ * `POST /api/admin/restore` (NDJSON body). `documents` counts the index rows this batch wrote,
+ * not the documents it made live — a document's `commit` usually lands in a later batch than its
+ * index row. Each document has exactly one index row in a backup, so the totals across a whole
+ * restore still add up to the number of documents in the file.
+ */
 export interface RestoreBackupResponse {
   applied: number;
   members: number;

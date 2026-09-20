@@ -77,6 +77,8 @@ export class Document extends YServer<Env> {
   private persistedMeta: PendingMeta | null = null;
   /** When the newest restore point was taken (ms); decides when the next automatic one is due. */
   private lastPointAt = 0;
+  /** Counts saved states. A backup reads the state in chunks and checks this has not moved. */
+  private saves = 0;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -135,6 +137,7 @@ export class Document extends YServer<Env> {
     this.takeAutomaticPoint();
     const state = Y.encodeStateAsUpdate(this.document);
     writeState(this.ctx.storage, state);
+    this.saves++;
 
     const tooLarge = state.byteLength > LIMITS.docStateBytes;
     if (tooLarge && !this.readOnly) this.broadcastControl({ type: "limit", code: "DOCUMENT_TOO_LARGE" });
@@ -387,7 +390,7 @@ export class Document extends YServer<Env> {
       // ---- backup (plan §8.5) ------------------------------------------------
       case "/export":
         // Straight from SQLite: exporting must not wake a hibernating document.
-        return ndjsonResponse(documentBackup(sql, this.name));
+        return ndjsonResponse(documentBackup(sql, this.name, () => this.saves));
 
       case "/restore-state":
         restoreStateChunk(sql, body);
