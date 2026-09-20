@@ -207,11 +207,14 @@ img.ProseMirror-separator {
   padding: 12px 8px 48px;
 }
 
-/* Continuous page: narrow screens, or a document with pages turned off. */
+/* Continuous page: narrow screens, or a document with pages turned off.
+   --colo-continuous-width is read by DocumentEditor, which needs the same number to decide
+   whether comment cards fit beside the page; keep them from drifting apart. */
+:root { --colo-continuous-width: 816px; } /* 8.5in at 96dpi */
 .colo-page {
   margin: 0 auto;
   width: 100%;
-  max-width: 816px; /* 8.5in at 96dpi */
+  max-width: var(--colo-continuous-width);
   min-height: 1056px; /* 11in */
   padding: 40px 20px;
   background: #fff;
@@ -310,6 +313,15 @@ img.ProseMirror-separator {
 }
 .colo-editor .colo-image-handle-left { left: -6px; cursor: nesw-resize; }
 .colo-editor .colo-image-handle-right { right: -6px; cursor: nwse-resize; }
+/* A finger cannot hit 12px. The dot stays the same size; the area that answers to a touch grows
+   around it, so resizing an image works on a phone without the handles looking clumsy. */
+@media (pointer: coarse) {
+  .colo-editor .colo-image-handle::before {
+    content: "";
+    position: absolute;
+    inset: -16px;
+  }
+}
 .colo-editor[contenteditable="true"] .colo-image.ProseMirror-selectednode .colo-image-handle { display: block; }
 .colo-editor a { color: #1155cc; text-decoration: underline; cursor: text; }
 .colo-editor mark { background-color: #ffff00; color: inherit; padding: 0; }

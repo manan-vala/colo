@@ -40,7 +40,10 @@ export function TableGridPicker({ onPick }: { onPick: (rows: number, cols: numbe
               aria-label={`${rows} by ${cols}`}
               data-selected={selected}
               className="size-4 rounded-[2px] border border-foreground/20 data-[selected=true]:border-primary data-[selected=true]:bg-primary/20"
-              onMouseEnter={() => setHover({ rows, cols })}
+              // Pointer events, not mouse: on a touch screen onMouseEnter never fires, so the
+              // highlight and the "N × M" label below never followed the finger.
+              onPointerEnter={() => setHover({ rows, cols })}
+              onPointerDown={() => setHover({ rows, cols })}
               onFocus={() => setHover({ rows, cols })}
               onClick={() => onPick(rows, cols)}
             />

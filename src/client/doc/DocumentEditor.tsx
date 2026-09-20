@@ -26,8 +26,15 @@ const OUTLINE_KEY = "colo.outlineOpen";
 const DESKTOP_QUERY = "(min-width: 1024px)";
 /** Narrower screens get a continuous page and no page bands (plan §6.2). */
 const PAGED_QUERY = "(min-width: 640px)";
-/** Width of a continuous (pageless) page; see .colo-page in index.css. */
-const CONTINUOUS_PAGE_WIDTH = 816;
+/**
+ * Width of a continuous (pageless) page, taken from the stylesheet that lays it out so the two
+ * cannot drift apart (`--colo-continuous-width` on `:root`; see `.colo-page` in index.css).
+ * Read at first render rather than at module scope, where the stylesheet may not have loaded yet.
+ */
+function continuousPageWidth(): number {
+  const value = getComputedStyle(document.documentElement).getPropertyValue("--colo-continuous-width");
+  return Number.parseInt(value, 10) || 816;
+}
 
 export interface DocumentEditorProps {
   collab: Collaboration;
@@ -79,6 +86,7 @@ function DocumentScreen({
   const desktop = useMediaQuery(DESKTOP_QUERY);
   const wide = useMediaQuery(PAGED_QUERY);
   const [zoom, setZoom] = useState(100);
+  const [continuousWidth] = useState(continuousPageWidth);
 
   // Pages
   const pageSettings = usePageSettings(collab.doc);
@@ -116,7 +124,7 @@ function DocumentScreen({
   const [commentsSheetOpen, setCommentsSheetOpen] = useState(false);
   const canvasRef = useRef<HTMLElement>(null);
   const canvasWidth = useElementWidth(canvasRef);
-  const pageWidth = ((paged ? layout.pageWidth : CONTINUOUS_PAGE_WIDTH) * zoom) / 100;
+  const pageWidth = ((paged ? layout.pageWidth : continuousWidth) * zoom) / 100;
   const marginFits = desktop && canvasWidth >= pageWidth + RAIL_WIDTH + 48;
   const showRail = marginFits && (comments.anchored.length > 0 || comments.draft !== null);
   const openCount = comments.anchored.length + comments.detached.length;
@@ -225,7 +233,10 @@ function DocumentScreen({
       </div>
 
       {!marginFits && comments.activeId && !commentsSheetOpen && (
-        <Button className="fixed right-4 bottom-4 z-10 shadow-lg print:hidden" onClick={() => setCommentsSheetOpen(true)}>
+        <Button
+          // Inset for the iOS home indicator, which the button would otherwise sit under.
+          style={{ right: "max(1rem, env(safe-area-inset-right))", bottom: "max(1rem, env(safe-area-inset-bottom))" }}
+          className="fixed z-10 shadow-lg print:hidden" onClick={() => setCommentsSheetOpen(true)}>
           <MessageSquareText data-icon="inline-start" />
           Show comment
         </Button>
