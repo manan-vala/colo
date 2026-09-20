@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import logo from "../assets/logo.svg";
 import { banner } from "./banner";
+import { LiquidLogo } from "./LiquidLogo";
 import { ApiRequestError, api } from "../api";
 import { downloadBackup } from "../backup";
 import { IMPORT_ACCEPT } from "../convert/formats";
@@ -89,7 +90,7 @@ export function Home({ member, onSignOut, onSessionEnded }: { member: Member; on
   const visible = (documents ?? []).filter((doc) => doc.title.toLowerCase().includes(filter.trim().toLowerCase()));
 
   return (
-    <div className="min-h-svh bg-muted/40">
+    <div className="flex min-h-svh flex-col bg-muted/40">
       <header className="flex items-center justify-between gap-3 border-b bg-background px-4 py-3">
         <span className="flex items-center gap-2 text-lg font-semibold tracking-tight">
           <img src={logo} alt="" className="size-5" />
@@ -126,7 +127,10 @@ export function Home({ member, onSignOut, onSessionEnded }: { member: Member; on
         <img src={banner} alt="" className="size-full object-cover" />
       </div>
 
-      <main className="mx-auto grid max-w-3xl gap-4 px-4 py-8">
+      {/* flex-1: on a short list this pushes the footer to the bottom of the viewport instead of
+          it crowding right under a handful of rows; on a long one it simply falls out of the way
+          and the footer appears at the end of the page, as usual. */}
+      <main className="mx-auto grid w-full max-w-3xl flex-1 content-start gap-4 px-4 py-8">
         <div className="flex flex-wrap items-center gap-3">
           <h1 className="mr-auto text-2xl font-semibold tracking-tight">Documents</h1>
           <input
@@ -181,6 +185,25 @@ export function Home({ member, onSignOut, onSessionEnded }: { member: Member; on
           </ul>
         )}
       </main>
+
+      <footer className="border-t bg-background px-4 py-10 sm:py-12">
+        <div className="mx-auto flex max-w-3xl flex-col items-center gap-4 text-center sm:flex-row sm:justify-between sm:gap-6 sm:text-left">
+          <div className="flex items-center gap-3">
+            <LiquidLogo />
+            <div className="text-sm text-muted-foreground">
+              <span className="font-medium text-foreground">Colo</span> — a private document editor, just for the two of you.
+            </div>
+          </div>
+          <a
+            href="https://github.com/manan-vala/colo"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+          >
+            Source on GitHub
+          </a>
+        </div>
+      </footer>
     </div>
   );
 }
