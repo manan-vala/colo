@@ -83,6 +83,22 @@ export function normalizeTitle(value: unknown, fallback?: string): string {
   return title || (fallback ?? DEFAULT_TITLE);
 }
 
+/**
+ * The same, for a title arriving from a Document object rather than from a person: an
+ * over-long one is cut rather than refused.
+ *
+ * Refusing it used to strand the document. The title in the Yjs map is whatever a client wrote
+ * — an import takes Word's, which has no length limit — and `updateMeta` is the machine path
+ * behind a save, with nobody to show a 400 to. The rejected RPC left `metaDirty` set, so the
+ * object re-armed its alarm every minute for as long as it lived and the document list never
+ * saw the new title or edit time again.
+ */
+export function clampTitle(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const title = value.trim().replace(/\s+/g, " ").slice(0, LIMITS.titleLength);
+  return title || null;
+}
+
 export class Documents {
   constructor(
     private readonly storage: DurableObjectStorage,
@@ -178,7 +194,7 @@ export class Documents {
 
   /** Called (throttled) by Document objects after saves. */
   updateMeta(id: string, meta: DocumentMeta): void {
-    const title = meta.title === null ? null : normalizeTitle(meta.title);
+    const title = clampTitle(meta.title);
     this.sql.exec(
       `UPDATE documents
           SET title = COALESCE(?, title), updated_at = ?, updated_by = COALESCE(?, updated_by)

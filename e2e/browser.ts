@@ -94,6 +94,12 @@ export async function press(page: Page, label: string) {
   await handle!.click();
 }
 
+/** Clicks a control by its data-testid, for controls whose accessible name is not a fixed word. */
+export async function pressTestId(page: Page, testId: string) {
+  const handle = await page.waitForSelector(`[data-testid="${testId}"]:not([disabled])`, { visible: true, timeout: 10_000 });
+  await handle!.click();
+}
+
 /** Opens a menu in the document's menu bar (File, Edit, …). */
 export async function openMenubar(page: Page, name: string) {
   const handle = (await page.waitForFunction(

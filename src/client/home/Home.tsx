@@ -97,7 +97,11 @@ export function Home({ member, onSignOut, onSessionEnded }: { member: Member; on
         </span>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="outline" size="sm" aria-label="Account">
+            {/* "Account" is a hidden word rather than an aria-label: a label that replaced the
+                visible name would leave voice control with no way to say this button's name, and
+                a screen reader never saying whose account it is (WCAG 2.5.3). */}
+            <Button variant="outline" size="sm" data-testid="account-menu">
+              <span className="sr-only">Account</span>
               <span className="max-w-32 truncate">{member.displayName}</span>
               <ChevronDown data-icon="inline-end" />
             </Button>

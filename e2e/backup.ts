@@ -21,7 +21,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "n
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Page } from "puppeteer-core";
-import { BASE_URL, check, clickButton, enroll, launch, press, waitForText } from "./browser.ts";
+import { BASE_URL, check, clickButton, enroll, launch, press, pressTestId, waitForText } from "./browser.ts";
 
 if (!BASE_URL.startsWith("http://localhost")) {
   throw new Error(`Refusing to run against ${BASE_URL}: this test restores over documents.`);
@@ -135,7 +135,7 @@ try {
   });
   await a.goto(BASE_URL);
   await waitForText(a, "Documents");
-  await press(a, "Account");
+  await pressTestId(a, "account-menu");
   await clickMenuItem(a, "Download backup");
   const saved = await waitForFile(downloads);
   check(saved.length > 0, `the account menu saves a backup to disk (${saved.length} bytes)`);

@@ -64,6 +64,8 @@ export class Document extends YServer<Env> {
   static callbackOptions = { debounceWait: 2000, debounceMaxWait: 10_000 };
 
   private readOnly = false;
+  /** The saved state would not apply (a torn restore). The document is held until one repairs it. */
+  private unreadable = false;
 
   // Document-list metadata not yet sent to Workspace. In memory while the object is awake; a
   // deferred update is also written to `pending_meta`, so eviction before the alarm loses nothing.
@@ -75,6 +77,8 @@ export class Document extends YServer<Env> {
   private persistedMeta: PendingMeta | null = null;
   /** When the newest restore point was taken (ms); decides when the next automatic one is due. */
   private lastPointAt = 0;
+  /** Counts saved states. A backup reads the state in chunks and checks this has not moved. */
+  private saves = 0;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -89,8 +93,17 @@ export class Document extends YServer<Env> {
     const { sql } = this.ctx.storage;
     const state = readState(sql);
     if (state) {
-      Y.applyUpdate(this.document, state);
-      this.readOnly = state.byteLength > LIMITS.docStateBytes;
+      // A state that will not apply must not throw: partyserver starts the object from `fetch`,
+      // so an exception here fails *every* request to it — including the restore routes that
+      // would repair it, which would leave the document unopenable for good. Instead the
+      // document opens empty and read-only, and `onSave` refuses to write over what is there.
+      try {
+        Y.applyUpdate(this.document, state);
+      } catch (error) {
+        this.unreadable = true;
+        console.error(JSON.stringify({ event: "document-unreadable", doc: this.name, bytes: state.byteLength }), error);
+      }
+      this.readOnly = this.unreadable || state.byteLength > LIMITS.docStateBytes;
     }
     this.lastPointAt = latestPointAt(sql);
     const pending = readPendingMeta(sql);
@@ -115,9 +128,16 @@ export class Document extends YServer<Env> {
   }
 
   async onSave(): Promise<void> {
+    // The document in memory is empty because its state would not load, not because someone
+    // emptied it. Saving would turn a recoverable document into a lost one.
+    if (this.unreadable) {
+      this.broadcastControl({ type: "limit", code: "DOCUMENT_UNREADABLE" });
+      return;
+    }
     this.takeAutomaticPoint();
     const state = Y.encodeStateAsUpdate(this.document);
     writeState(this.ctx.storage, state);
+    this.saves++;
 
     const tooLarge = state.byteLength > LIMITS.docStateBytes;
     if (tooLarge && !this.readOnly) this.broadcastControl({ type: "limit", code: "DOCUMENT_TOO_LARGE" });
@@ -167,6 +187,8 @@ export class Document extends YServer<Env> {
       } catch {
         throw new HttpError(400, "INVALID_STATE", "The restored state is not a Yjs update");
       }
+      // The state applied, so whatever could not be read before has just been replaced.
+      this.unreadable = false;
       this.readOnly = state.byteLength > LIMITS.docStateBytes;
     }
     this.lastPointAt = latestPointAt(sql);
@@ -244,6 +266,8 @@ export class Document extends YServer<Env> {
     }
     connection.setState({ identity, tokens: LIMITS.messageBurst, refilledAt: Date.now() });
     super.onConnect(connection, ctx);
+    // Otherwise the document just looks empty, and the temptation is to start typing it again.
+    if (this.unreadable) this.sendControl(connection, { type: "limit", code: "DOCUMENT_UNREADABLE" });
   }
 
   onMessage(connection: Connection<ConnectionState>, message: WSMessage): void {
@@ -350,6 +374,8 @@ export class Document extends YServer<Env> {
       createdBy: person(identity),
     });
     replaceState(this.document, snapshot);
+    // A restore point is also the way back from a state that would not load (`onLoad`).
+    this.unreadable = false;
     this.lastEditor = identity.memberId;
     await this.onSave();
     this.broadcastControl({ type: "restored", by: identity.displayName, at: point.createdAt });
@@ -364,7 +390,7 @@ export class Document extends YServer<Env> {
       // ---- backup (plan §8.5) ------------------------------------------------
       case "/export":
         // Straight from SQLite: exporting must not wake a hibernating document.
-        return ndjsonResponse(documentBackup(sql, this.name));
+        return ndjsonResponse(documentBackup(sql, this.name, () => this.saves));
 
       case "/restore-state":
         restoreStateChunk(sql, body);

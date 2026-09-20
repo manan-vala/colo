@@ -1,6 +1,7 @@
 import type { Editor, JSONContent } from "@tiptap/core";
 import type * as Y from "yjs";
 import { SETTINGS_KEYS, SETTINGS_MAP, readPageSettings } from "../../shared/doc-schema";
+import { LIMITS } from "../../shared/protocol";
 import { updatePageSettings } from "../collab/usePageSettings";
 import { clearThreads, importThreads, type Author } from "../comments/model";
 import { prepareImage } from "../editor/images/compress";
@@ -55,7 +56,9 @@ export function applyImport(editor: Editor, doc: Y.Doc, imported: ImportedDocume
   const settings = doc.getMap(SETTINGS_MAP);
   const current = readPageSettings((key) => settings.get(key));
   updatePageSettings(doc, { ...current, ...imported.settings });
-  if (imported.title.trim()) settings.set(SETTINGS_KEYS.title, imported.title.trim());
+  // Word's title has no length limit; the shared document's does (the list column it feeds).
+  const title = imported.title.trim().slice(0, LIMITS.titleLength);
+  if (title) settings.set(SETTINGS_KEYS.title, title);
   clearThreads(doc);
   importThreads(
     doc,

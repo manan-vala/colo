@@ -116,10 +116,18 @@ export function prunePoints(sql: SqlStorage, keep: number, newest: string): void
   }
 }
 
-/** True when a saved state has no document content (a new, empty document). */
+/**
+ * True when a saved state has no document content (a new, empty document), and also when it
+ * cannot be read at all — there is nothing worth keeping in either case, and this runs on the
+ * save path, where a throw would take the save with it.
+ */
 export function isEmptyState(state: Uint8Array): boolean {
   const doc = new Y.Doc();
-  Y.applyUpdate(doc, state);
+  try {
+    Y.applyUpdate(doc, state);
+  } catch {
+    return true;
+  }
   return doc.getXmlFragment(CONTENT_FIELD).length === 0;
 }
 

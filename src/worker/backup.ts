@@ -42,13 +42,15 @@ export const encodeRecord = (record: BackupRecord): Uint8Array => encoder.encode
 export function parseRecords(text: string): BackupRecord[] {
   return text
     .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-    .map((line, index) => {
+    // The line number is taken before blank lines are dropped: it has to point at the line the
+    // operator will find in the file, not at the nth non-blank one.
+    .map((line, index) => ({ line: line.trim(), number: index + 1 }))
+    .filter(({ line }) => line.length > 0)
+    .map(({ line, number }) => {
       try {
         return JSON.parse(line) as BackupRecord;
       } catch {
-        throw new HttpError(400, "INVALID_BACKUP", `Line ${index + 1} is not JSON`);
+        throw new HttpError(400, "INVALID_BACKUP", `Line ${number} is not JSON`);
       }
     });
 }
@@ -143,10 +145,17 @@ export async function* workspaceBackup(
       throw new Error(`Document ${row.id} export failed: ${response.status}`);
     }
     const reader = response.body.getReader();
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      yield value;
+    // `finally` matters: a cancelled download (`ndjsonResponse`) resumes this generator at the
+    // `yield` with a return completion, which would otherwise leave this document's response
+    // stream open with nobody reading it.
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        yield value;
+      }
+    } finally {
+      await reader.cancel().catch(() => undefined);
     }
   }
 
@@ -159,9 +168,22 @@ type ImageRow = { id: string; mime: string; bytes: number; created_at: string; c
  * The Document half: its saved state, chunk by chunk, then its images. Read straight from SQLite
  * one row at a time — the live Yjs document is never loaded, so exporting does not wake a
  * hibernating object. Edits saved on the debounce (at most 10 s old) are therefore not included.
+ *
+ * `saveCount` guards a document large enough to be stored in several chunks (over 1.9 MB). Each
+ * `yield` suspends until the reader pulls, and the object is free to run its debounced save in
+ * between, so chunk 0 could come from the state before a save and chunk 1 from the state after
+ * it — a pair that is not a Yjs update at all, in a file that otherwise looks complete. A save
+ * during the export therefore fails it: the file ends without its `end` record, which is what
+ * tells a restore that a backup is truncated (§8.5). One chunk is read in one statement, so the
+ * usual document cannot tear and is never refused.
  */
-export async function* documentBackup(sql: SqlStorage, docId: string): AsyncGenerator<Uint8Array> {
+export async function* documentBackup(
+  sql: SqlStorage,
+  docId: string,
+  saveCount: () => number = () => 0,
+): AsyncGenerator<Uint8Array> {
   const chunks = sql.exec<{ seq: number }>("SELECT seq FROM doc_state ORDER BY seq").toArray();
+  const savesBefore = saveCount();
   for (const { seq } of chunks) {
     const row = sql.exec<{ data: ArrayBuffer }>("SELECT data FROM doc_state WHERE seq = ?", seq).toArray()[0];
     if (!row) continue;
@@ -171,6 +193,9 @@ export async function* documentBackup(sql: SqlStorage, docId: string): AsyncGene
       seq,
       data: toBase64(new Uint8Array(row.data)),
     } satisfies BackupState);
+  }
+  if (chunks.length > 1 && saveCount() !== savesBefore) {
+    throw new Error(`Document ${docId} was edited while it was being exported; take the backup again`);
   }
 
   const images = sql
@@ -359,6 +384,12 @@ export function restoreImage(sql: SqlStorage, body: Partial<BackupImage>): void 
   // the size limits still apply.
   if (sniffImageType(data) !== body.mime) throw new HttpError(415, "UNSUPPORTED_TYPE", "image.data is not its type");
   if (data.byteLength > LIMITS.imageBytes) throw new HttpError(413, "IMAGE_TOO_LARGE");
+  // Including the whole-document cap an upload gets. Restoring one backup cannot breach it (the
+  // images passed on the way in), but restoring several files into one document could.
+  const stored = sql.exec<{ total: number | null }>("SELECT SUM(bytes) AS total FROM images WHERE id <> ?", id).one().total ?? 0;
+  if (stored + data.byteLength > LIMITS.documentImageBytes) {
+    throw new HttpError(413, "DOCUMENT_IMAGES_FULL", "This document has no room for more images");
+  }
   sql.exec(
     `INSERT INTO images (id, mime, bytes, data, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?)
        ON CONFLICT (id) DO UPDATE SET mime = excluded.mime, bytes = excluded.bytes, data = excluded.data,
