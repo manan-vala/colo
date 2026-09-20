@@ -4,7 +4,7 @@
  *   npm run dev            (in another terminal)
  *   node e2e/auth.ts
  */
-import { BASE_URL, check, clickButton, createInvite, launch, newUser, waitForText } from "./browser.ts";
+import { BASE_URL, check, chooseMenuItem, clickButton, createInvite, launch, newUser, pressTestId, waitForText } from "./browser.ts";
 
 const stamp = Date.now().toString(36);
 const name = `E2E ${stamp}`;
@@ -30,7 +30,9 @@ try {
   check(true, "a used invite link is rejected");
 
   await page.goto(BASE_URL);
-  await clickButton(page, "Sign out");
+  // Sign out lives in the account menu on the document list (M8 put it there with the backup).
+  await pressTestId(page, "account-menu");
+  await chooseMenuItem(page, "Sign out");
   await waitForText(page, "Sign in with passkey");
   check((await (await page.goto(`${BASE_URL}/api/me`))!.status()) === 401, "signed out: /api/me returns 401");
 
