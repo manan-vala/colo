@@ -36,6 +36,12 @@ M0–M7 are **built and deployed** to `colo.manan-vala.workers.dev`:
 
 Also in M8: the phone pass (`npm run e2e:mobile`), `npm run ci` as the CI gate (typecheck → tests → build, in that order because `npm test` does not typecheck), `LICENSE` and `SECURITY.md`.
 
+**Review pass (20 Sep 2026, plan v4.15)** — four rules it left behind:
+- **A title reaching Workspace from a Document object is cut, not refused** (`clampTitle`). `updateMeta` runs behind a save with nobody to show a 400 to; throwing there stranded the document's index row and left an alarm retrying every minute.
+- **Nothing on the load or save path may throw on a bad stored state.** partyserver starts an object from `fetch`, so a throw in `onLoad` fails *every* request to it — including the routes that would repair it. A state that will not apply sets `unreadable`: read-only, `DOCUMENT_UNREADABLE` to the client, and `onSave` returns without writing.
+- **A record yielded by the backup generators suspends the object**, which is free to save in between. `documentBackup` takes a save counter and fails the export of a multi-chunk document that was saved underneath it.
+- **e2e suites are the only cover the client's stateful parts have**, and nothing runs them in CI — so a UI change must be walked through the suite that touches it (`Sign out` moving into the account menu broke `e2e:auth` for a whole milestone without anyone noticing).
+
 **Not done** — Workers Builds is not connected (dashboard-side, see §8.4), M8 is not deployed, no metrics reading has been taken, and nobody has opened Colo on a real phone.
 
 ## Stack
