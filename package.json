@@ -83,6 +83,7 @@
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.1",
     "@xmldom/xmldom": "^0.9.12",
+    "agentation": "^3.0.2",
     "lib0": "^0.2.117",
     "puppeteer-core": "^25.11.0",
     "tailwindcss": "^4.3.3",

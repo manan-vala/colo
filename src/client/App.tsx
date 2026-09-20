@@ -1,5 +1,5 @@
 import { LoaderCircle } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import type { Member } from "../shared/protocol";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { InviteScreen, SignInScreen } from "./auth/AuthScreens";
@@ -10,10 +10,25 @@ import { navigate, usePathname } from "./router";
 
 type AuthState = { status: "loading" } | { status: "signed-out" } | { status: "signed-in"; member: Member };
 
+/**
+ * Click-to-annotate feedback for whoever is coding against this app (`agentation`, dev-only —
+ * see package.json). `import.meta.env.DEV` is `false` for both `vite build` and `vite preview`,
+ * and Vite inlines it as a literal at build time, so the branch below — and this whole ~660 KB
+ * chunk — is dead code the production build never reaches, let alone ships. It never runs
+ * against a deployed Worker either way: `npm run dev` is the only thing that serves un-built
+ * source, and that is the only place `import.meta.env.DEV` is true.
+ */
+const DevFeedback = import.meta.env.DEV ? lazy(() => import("agentation").then((m) => ({ default: m.Agentation }))) : null;
+
 export default function App() {
   return (
     <TooltipProvider delayDuration={400}>
       <Routes />
+      {DevFeedback && (
+        <Suspense fallback={null}>
+          <DevFeedback />
+        </Suspense>
+      )}
     </TooltipProvider>
   );
 }
