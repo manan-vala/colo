@@ -1,7 +1,7 @@
 import { abortAllDurableObjects, env, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
-import { SETTINGS_KEYS, SETTINGS_MAP } from "../src/shared/doc-schema";
+import { CONTENT_FIELD, SETTINGS_KEYS, SETTINGS_MAP } from "../src/shared/doc-schema";
 import { CLOSE_CODES, LIMITS, type DocumentSummary, type ListDocumentsResponse } from "../src/shared/protocol";
 import { takeToken, type ConnectionState, type Document } from "../src/worker/document";
 import { STATE_CHUNK_BYTES } from "../src/worker/storage";
@@ -359,5 +359,74 @@ describe("a title the document list cannot take", () => {
     expect(after.alarm).toBeNull();
     const listed = await (await call(`/api/docs/${doc.id}`, { cookie })).json<DocumentSummary>();
     expect(listed.title).toBe("y".repeat(LIMITS.titleLength));
+  });
+});
+
+describe("a saved state that will not load", () => {
+  /** Leaves the document with bytes that are not a Yjs update, as a torn restore would. */
+  async function damage(docId: string) {
+    await runInDurableObject(documentStub(docId), (_instance, state) => {
+      state.storage.sql.exec("UPDATE doc_state SET data = ? WHERE seq = 0", new Uint8Array([9, 9, 9, 9, 9]).buffer);
+    });
+    await abortAllDurableObjects(); // so the next request loads it fresh
+  }
+
+  it("opens read-only rather than failing every request to the object", async () => {
+    const { cookie } = await enroll();
+    const doc = await createDoc(cookie, "Damaged");
+    await runInDurableObject(documentStub(doc.id), async (instance) => {
+      instance.document.getXmlFragment(CONTENT_FIELD).insert(0, [new Y.XmlText("real content")]);
+      await instance.onSave();
+    });
+    await damage(doc.id);
+
+    // The restore-point routes are how a damaged document is repaired; they must still answer.
+    const points = await call(`/api/docs/${doc.id}/restore-points`, { cookie });
+    expect(points.status).toBe(200);
+
+    const client = await connect(doc.id, cookie);
+    await client.synced;
+    await eventually(() => expect(client.events).toContainEqual({ type: "limit", code: "DOCUMENT_UNREADABLE" }));
+    client.close();
+  });
+
+  it("never saves the empty document over the damaged state", async () => {
+    const { cookie } = await enroll();
+    const doc = await createDoc(cookie, "Kept");
+    await runInDurableObject(documentStub(doc.id), async (instance) => {
+      instance.document.getXmlFragment(CONTENT_FIELD).insert(0, [new Y.XmlText("worth keeping")]);
+      await instance.onSave();
+    });
+    await damage(doc.id);
+
+    // Through the router, so the object starts the way a request starts it (`onLoad` runs).
+    expect((await call(`/api/docs/${doc.id}/restore-points`, { cookie })).status).toBe(200);
+    await runInDurableObject(documentStub(doc.id), async (instance) => {
+      await instance.onSave();
+    });
+    const stored = await runInDurableObject(documentStub(doc.id), (_instance, state) =>
+      state.storage.sql.exec<{ data: ArrayBuffer }>("SELECT data FROM doc_state WHERE seq = 0").one(),
+    );
+    // Still the damaged bytes, not an empty document written over them.
+    expect(new Uint8Array(stored.data)).toEqual(new Uint8Array([9, 9, 9, 9, 9]));
+  });
+
+  it("comes back when a restore point is restored", async () => {
+    const { cookie } = await enroll();
+    const doc = await createDoc(cookie, "Repaired");
+    await runInDurableObject(documentStub(doc.id), async (instance) => {
+      instance.document.getXmlFragment(CONTENT_FIELD).insert(0, [new Y.XmlText("the good version")]);
+      await instance.onSave();
+    });
+    const point = await (
+      await call(`/api/docs/${doc.id}/restore-points`, { body: { label: "good" }, cookie })
+    ).json<{ id: string }>();
+    await damage(doc.id);
+
+    const restored = await call(`/api/docs/${doc.id}/restore-points/${point.id}/restore`, { body: {}, cookie });
+    expect(restored.status).toBe(200);
+    await runInDurableObject(documentStub(doc.id), (instance) => {
+      expect(instance.document.getXmlFragment(CONTENT_FIELD).toString()).toContain("the good version");
+    });
   });
 });

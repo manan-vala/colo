@@ -267,7 +267,7 @@ export type ControlEvent =
   | { type: "document-deleted" }
   /** Someone restored a restore point; `by` is their display name. */
   | { type: "restored"; by: string; at: string }
-  | { type: "limit"; code: "MESSAGE_TOO_LARGE" | "RATE_LIMITED" | "DOCUMENT_TOO_LARGE" };
+  | { type: "limit"; code: "MESSAGE_TOO_LARGE" | "RATE_LIMITED" | "DOCUMENT_TOO_LARGE" | "DOCUMENT_UNREADABLE" };
 
 /** WebSocket close codes used by the Document object. */
 export const CLOSE_CODES = {

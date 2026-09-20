@@ -119,7 +119,9 @@ export function useCollaboration(docId: string, member: Member): Collaboration |
           break;
         case "limit":
           if (event.code === "DOCUMENT_TOO_LARGE") showNotice("This document has reached its size limit and is now read-only.", true);
-          else showNotice("Connection reset by the server; reconnecting.");
+          else if (event.code === "DOCUMENT_UNREADABLE") {
+            showNotice("This document's saved copy could not be opened. It is read-only until an earlier version is restored.", true);
+          } else showNotice("Connection reset by the server; reconnecting.");
           break;
       }
     };
