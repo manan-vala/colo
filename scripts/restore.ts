@@ -11,8 +11,9 @@
  * passkeys are enrolled (§8.2), so there the endpoint does not exist. The token is read from
  * COLO_ADMIN_TOKEN, then ADMIN_TOKEN in .dev.vars, then ~/.colo/admin-token.
  *
- * Nothing is ever deleted: rows in the backup win, rows not in it are left alone. Running the
- * same file twice is a no-op, so a failed run can simply be repeated.
+ * Nothing is ever deleted: rows in the backup win, rows not in it are left alone. Every write is
+ * an upsert keyed on the id from the backup, so a run that stops part-way can be repeated — with
+ * --overwrite, because by then the instance holds the documents the first attempt wrote.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -54,17 +55,18 @@ async function failure(response: Response): Promise<string> {
 
 function read(file: string): BackupRecord[] {
   if (!existsSync(file)) fail(`No such file: ${file}`);
+  // Numbered before the blank lines go, so a complaint points at the line in the file.
   const lines = readFileSync(file, "utf8")
     .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
+    .map((line, index) => ({ line: line.trim(), number: index + 1 }))
+    .filter(({ line }) => line.length > 0);
   if (lines.length === 0) fail("The backup is empty.");
 
-  const records = lines.map((line, index) => {
+  const records = lines.map(({ line, number }) => {
     try {
       return JSON.parse(line) as BackupRecord;
     } catch {
-      return fail(`Line ${index + 1} of the backup is not JSON.`);
+      return fail(`Line ${number} of the backup is not JSON.`);
     }
   });
   // Without its last line the export stopped part-way, and NDJSON gives no other way to tell.
@@ -72,11 +74,25 @@ function read(file: string): BackupRecord[] {
   return records;
 }
 
+/**
+ * Whether a URL points at this machine. The hostname is compared, never the text of the URL:
+ * `http://localhost.example.com` starts with "http://localhost" and belongs to someone else,
+ * while `http://127.0.0.1:5173` does not and is this machine.
+ */
+function isLocal(url: string): boolean {
+  try {
+    const { hostname } = new URL(url);
+    return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]" || hostname === "::1";
+  } catch {
+    return false;
+  }
+}
+
 async function main(): Promise<void> {
   if (!values.file) fail("Usage: npm run restore -- --file <backup.ndjson> [--overwrite] [--url <url> --force]");
 
   const base = values.url ?? LOCAL_URL;
-  if (!base.startsWith("http://localhost") && !values.force) {
+  if (!isLocal(base) && !values.force) {
     fail(`Refusing to restore into ${base} without --force. A restore writes over documents.`);
   }
 
