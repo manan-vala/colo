@@ -90,108 +90,109 @@ export function Home({ member, onSignOut, onSessionEnded }: { member: Member; on
   const visible = (documents ?? []).filter((doc) => doc.title.toLowerCase().includes(filter.trim().toLowerCase()));
 
   return (
-    <div className="flex min-h-svh flex-col bg-muted/40">
-      <header className="flex items-center justify-between gap-3 border-b bg-background px-4 py-3">
-        <span className="flex items-center gap-2 text-lg font-semibold tracking-tight">
-          <img src={logo} alt="" className="size-5" />
-          Colo
-        </span>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            {/* "Account" is a hidden word rather than an aria-label: a label that replaced the
-                visible name would leave voice control with no way to say this button's name, and
-                a screen reader never saying whose account it is (WCAG 2.5.3). */}
-            <Button variant="outline" size="sm" data-testid="account-menu">
-              <span className="sr-only">Account</span>
-              <span className="max-w-32 truncate">{member.displayName}</span>
-              <ChevronDown data-icon="inline-end" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-56">
-            <DropdownMenuLabel className="truncate font-normal text-muted-foreground">{member.email}</DropdownMenuLabel>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onSelect={backUp} disabled={backingUp}>
-              {backingUp ? <LoaderCircle className="animate-spin" /> : <Download />}
-              {backingUp ? "Preparing…" : "Download backup"}
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onSelect={onSignOut}>
-              <LogOut />
-              Sign out
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </header>
+    <div className="flex flex-col bg-muted/40">
+      {/* min-h-svh: the header, banner and document list always fill a full screen's height, so
+          the footer sits just past one screen-height of scrolling instead of crowding the list. */}
+      <div className="flex min-h-svh flex-col">
+        <header className="flex items-center justify-between gap-3 border-b bg-background px-4 py-3">
+          <span className="flex items-center gap-2 text-lg font-semibold tracking-tight">
+            <img src={logo} alt="" className="size-5" />
+            Colo
+          </span>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              {/* "Account" is a hidden word rather than an aria-label: a label that replaced the
+                  visible name would leave voice control with no way to say this button's name, and
+                  a screen reader never saying whose account it is (WCAG 2.5.3). */}
+              <Button variant="outline" size="sm" data-testid="account-menu">
+                <span className="sr-only">Account</span>
+                <span className="max-w-32 truncate">{member.displayName}</span>
+                <ChevronDown data-icon="inline-end" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-56">
+              <DropdownMenuLabel className="truncate font-normal text-muted-foreground">{member.email}</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={backUp} disabled={backingUp}>
+                {backingUp ? <LoaderCircle className="animate-spin" /> : <Download />}
+                {backingUp ? "Preparing…" : "Download backup"}
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={onSignOut}>
+                <LogOut />
+                Sign out
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </header>
 
-      <div className="h-40 w-full overflow-hidden sm:h-48">
-        <img src={banner} alt="" className="size-full object-cover" />
-      </div>
-
-      {/* flex-1: on a short list this pushes the footer to the bottom of the viewport instead of
-          it crowding right under a handful of rows; on a long one it simply falls out of the way
-          and the footer appears at the end of the page, as usual. */}
-      <main className="mx-auto grid w-full max-w-3xl flex-1 content-start gap-4 px-4 py-8">
-        <div className="flex flex-wrap items-center gap-3">
-          <h1 className="mr-auto text-2xl font-semibold tracking-tight">Documents</h1>
-          <input
-            type="search"
-            aria-label="Filter documents by title"
-            placeholder="Filter by title"
-            value={filter}
-            onChange={(event) => setFilter(event.target.value)}
-            className="h-8 w-44 rounded-md border bg-background px-2.5 text-sm outline-none focus:border-ring"
-          />
-          <input
-            ref={fileInput}
-            type="file"
-            accept={IMPORT_ACCEPT}
-            hidden
-            aria-label="Choose a file to import"
-            onChange={(event) => {
-              const file = event.target.files?.[0];
-              event.target.value = "";
-              if (file) void importFile(file);
-            }}
-          />
-          <Button variant="outline" onClick={() => fileInput.current?.click()} disabled={importing} title="Word, Markdown, web page or text file">
-            {importing ? <LoaderCircle className="animate-spin" data-icon="inline-start" /> : <FileUp data-icon="inline-start" />}
-            {importing ? "Importing…" : "Import file"}
-          </Button>
-          <Button onClick={create} disabled={creating}>
-            {creating ? <LoaderCircle className="animate-spin" data-icon="inline-start" /> : <Plus data-icon="inline-start" />}
-            New document
-          </Button>
+        <div className="h-40 w-full overflow-hidden sm:h-48">
+          <img src={banner} alt="" className="size-full object-cover" />
         </div>
 
-        {error && (
-          <p role="alert" className="text-sm text-destructive">
-            {error}
-          </p>
-        )}
-
-        {documents === null ? (
-          <div className="flex justify-center py-10 text-muted-foreground">
-            <LoaderCircle className="size-5 animate-spin" aria-label="Loading" />
+        <main className="mx-auto grid w-full max-w-3xl flex-1 content-start gap-4 px-4 py-8">
+          <div className="flex flex-wrap items-center gap-3">
+            <h1 className="mr-auto text-2xl font-semibold tracking-tight">Documents</h1>
+            <input
+              type="search"
+              aria-label="Filter documents by title"
+              placeholder="Filter by title"
+              value={filter}
+              onChange={(event) => setFilter(event.target.value)}
+              className="h-8 w-44 rounded-md border bg-background px-2.5 text-sm outline-none focus:border-ring"
+            />
+            <input
+              ref={fileInput}
+              type="file"
+              accept={IMPORT_ACCEPT}
+              hidden
+              aria-label="Choose a file to import"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                event.target.value = "";
+                if (file) void importFile(file);
+              }}
+            />
+            <Button variant="outline" onClick={() => fileInput.current?.click()} disabled={importing} title="Word, Markdown, web page or text file">
+              {importing ? <LoaderCircle className="animate-spin" data-icon="inline-start" /> : <FileUp data-icon="inline-start" />}
+              {importing ? "Importing…" : "Import file"}
+            </Button>
+            <Button onClick={create} disabled={creating}>
+              {creating ? <LoaderCircle className="animate-spin" data-icon="inline-start" /> : <Plus data-icon="inline-start" />}
+              New document
+            </Button>
           </div>
-        ) : visible.length === 0 ? (
-          <p className="rounded-lg border border-dashed bg-background px-4 py-10 text-center text-muted-foreground">
-            {documents.length === 0 ? "No documents yet. Create the first one." : "No documents match that filter."}
-          </p>
-        ) : (
-          <ul className="divide-y rounded-lg border bg-background">
-            {visible.map((doc) => (
-              <DocumentRow key={doc.id} doc={doc} onChanged={load} onError={handleError} />
-            ))}
-          </ul>
-        )}
-      </main>
+
+          {error && (
+            <p role="alert" className="text-sm text-destructive">
+              {error}
+            </p>
+          )}
+
+          {documents === null ? (
+            <div className="flex justify-center py-10 text-muted-foreground">
+              <LoaderCircle className="size-5 animate-spin" aria-label="Loading" />
+            </div>
+          ) : visible.length === 0 ? (
+            <p className="rounded-lg border border-dashed bg-background px-4 py-10 text-center text-muted-foreground">
+              {documents.length === 0 ? "No documents yet. Create the first one." : "No documents match that filter."}
+            </p>
+          ) : (
+            <ul className="divide-y rounded-lg border bg-background">
+              {visible.map((doc) => (
+                <DocumentRow key={doc.id} doc={doc} onChanged={load} onError={handleError} />
+              ))}
+            </ul>
+          )}
+        </main>
+      </div>
 
       <footer className="border-t bg-background px-4 py-10 sm:py-12">
         <div className="mx-auto flex max-w-3xl flex-col items-center gap-4 text-center sm:flex-row sm:justify-between sm:gap-6 sm:text-left">
           <div className="flex items-center gap-3">
             <LiquidLogo />
             <div className="text-sm text-muted-foreground">
-              <span className="font-medium text-foreground">Colo</span> — a private document editor, just for the two of you.
+              <span className="font-medium text-foreground">Colo</span> is a private document editor, just for the two of you.
             </div>
           </div>
           <a
