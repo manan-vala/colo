@@ -1,6 +1,8 @@
-import { isDocumentId } from "../shared/protocol";
+import { isDocumentId, type LoginRequest } from "../shared/protocol";
+import { readSessionCookie } from "./auth";
 import { IDENTITY_HEADER, encodeIdentity } from "./documents";
 
+export { Admin } from "./admin";
 export { Document } from "./document";
 export { Workspace } from "./workspace";
 
@@ -32,14 +34,17 @@ function jsonError(status: number, error: string): Response {
 
 const UNSAFE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
+/** Called by scripts with the ADMIN_TOKEN bearer rather than from a browser with a cookie. */
+const TOKEN_ROUTES = new Set(["/api/admin/enroll-token", "/api/admin/restore"]);
+
 /**
  * Cross-site request and WebSocket hijacking protection (§4.1): state-changing requests and
- * upgrades must come from Colo's own origin. The admin API is called by a script with a
- * bearer token instead, so it is exempt.
+ * upgrades must come from Colo's own origin. The two token routes are called by scripts with a
+ * bearer token instead, so they are exempt; the owner's dashboard uses a cookie, so it is not.
  */
 function hasTrustedOrigin(request: Request, url: URL, env: Env): boolean {
   const needsOrigin =
-    (UNSAFE_METHODS.has(request.method) && !url.pathname.startsWith("/api/admin/")) ||
+    (UNSAFE_METHODS.has(request.method) && !TOKEN_ROUTES.has(url.pathname)) ||
     request.headers.get("Upgrade")?.toLowerCase() === "websocket";
   return !needsOrigin || request.headers.get("Origin") === env.ORIGIN;
 }
@@ -69,7 +74,29 @@ export default {
     if (!hasTrustedOrigin(request, url, env)) return jsonError(403, "BAD_ORIGIN");
     if (isCrossSiteExport(request, url, env)) return jsonError(403, "BAD_ORIGIN");
 
-    const workspace = env.WORKSPACE.getByName("default", { locationHint: "apac" });
+    // The owner's dashboard and the workspace registry (M9).
+    if (url.pathname.startsWith("/api/admin/")) {
+      return withSecurityHeaders(await env.ADMIN.getByName("admin", { locationHint: "apac" }).fetch(request));
+    }
+
+    // Sign-in names a workspace by its slug; the Admin object turns that into its object. Every
+    // failure gets the same answer as a wrong password.
+    if (url.pathname === "/api/auth/login" && request.method === "POST") {
+      const body = (await request
+        .clone()
+        .json()
+        .catch(() => null)) as Partial<LoginRequest> | null;
+      const slug = typeof body?.workspace === "string" ? body.workspace.slice(0, 64) : "";
+      const name = slug ? await env.ADMIN.getByName("admin", { locationHint: "apac" }).resolve(slug) : null;
+      if (!name) return withSecurityHeaders(Response.json({ error: "LOGIN_FAILED", message: "Wrong workspace, email or password" }, { status: 401 }));
+      return withSecurityHeaders(await env.WORKSPACE.getByName(name, { locationHint: "apac" }).fetch(request));
+    }
+
+    // Everything else goes to the workspace named in the session cookie. Without one, the request
+    // is not signed in; "default" answers it (a 401, or the health check).
+    const workspace = env.WORKSPACE.getByName(readSessionCookie(request.headers.get("Cookie"))?.workspace ?? "default", {
+      locationHint: "apac",
+    });
 
     const socket = /^\/api\/docs\/([^/]+)\/ws$/.exec(url.pathname);
     if (socket) {

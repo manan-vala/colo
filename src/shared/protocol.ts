@@ -15,9 +15,16 @@ export interface Member {
   displayName: string;
 }
 
+/** The workspace a member signed in to. */
+export interface WorkspaceRef {
+  slug: string;
+  name: string;
+}
+
 /** Body of `GET /api/me`. */
 export interface MeResponse {
   member: Member;
+  workspace: WorkspaceRef;
 }
 
 export interface ApiError {
@@ -25,39 +32,118 @@ export interface ApiError {
   message?: string;
 }
 
-/** `POST /api/admin/invites` */
-export interface CreateInviteRequest {
+/** `POST /api/auth/login` (M9): a member signs in to one workspace with a password. */
+export interface LoginRequest {
+  workspace: string;
   email: string;
-  name: string;
+  password: string;
 }
-export interface CreateInviteResponse {
-  memberId: string;
-  url: string;
-  expiresAt: string;
+/** `POST /api/auth/password`: a member changes their own password. */
+export interface ChangePasswordRequest {
+  current: string;
+  next: string;
 }
 
-/** `POST /api/auth/register/options` */
-export interface RegisterOptionsRequest {
-  inviteToken: string;
-}
-/** `POST /api/auth/register/verify` */
-export interface RegisterVerifyRequest {
-  inviteToken: string;
-  challengeId: string;
-  response: unknown;
-}
-/** `POST /api/auth/login/verify` */
-export interface LoginVerifyRequest {
-  challengeId: string;
-  response: unknown;
-}
-/** Returned by both `options` endpoints; `options` is WebAuthn options JSON. */
+export const PASSWORD_MIN_LENGTH = 12;
+export const PASSWORD_MAX_LENGTH = 128;
+
+/** Lower-case letters, digits and hyphens; starts with a letter or digit. */
+export const WORKSPACE_SLUG = /^[a-z0-9][a-z0-9-]{1,39}$/;
+
+export const SESSION_COOKIE = "__Host-colo_session";
+export const ADMIN_COOKIE = "__Host-colo_admin";
+
+// ---- owner dashboard (M9) ---------------------------------------------------------
+
+/** Returned by both passkey `options` endpoints; `options` is WebAuthn options JSON. */
 export interface CeremonyOptionsResponse<T> {
   challengeId: string;
   options: T;
 }
+/** `POST /api/admin/enroll/options` */
+export interface EnrollOptionsRequest {
+  token: string;
+}
+/** `POST /api/admin/enroll/verify` */
+export interface EnrollVerifyRequest {
+  token: string;
+  challengeId: string;
+  response: unknown;
+}
+/** `POST /api/admin/login/verify` */
+export interface AdminLoginVerifyRequest {
+  challengeId: string;
+  response: unknown;
+}
+/** `POST /api/admin/enroll-token` (bearer ADMIN_TOKEN) */
+export interface EnrollTokenResponse {
+  url: string;
+  expiresAt: string;
+}
 
-export const SESSION_COOKIE = "__Host-colo_session";
+export interface AdminWorkspace {
+  slug: string;
+  name: string;
+  maxMembers: number;
+  disabledAt: string | null;
+  createdAt: string;
+  /** Members who can sign in (not disabled). */
+  members: number;
+  documents: number;
+}
+/** `GET /api/admin/workspaces` */
+export interface AdminWorkspacesResponse {
+  workspaces: AdminWorkspace[];
+}
+/** `POST /api/admin/workspaces` */
+export interface CreateWorkspaceRequest {
+  slug: string;
+  name: string;
+  maxMembers?: number;
+}
+/** `PATCH /api/admin/workspaces/:slug` */
+export interface UpdateWorkspaceRequest {
+  slug?: string;
+  name?: string;
+  maxMembers?: number;
+  disabled?: boolean;
+}
+
+export interface AdminMember {
+  id: string;
+  email: string;
+  displayName: string;
+  createdAt: string;
+  disabledAt: string | null;
+  /** False for a member restored from a backup or carried over from invites, until one is set. */
+  hasPassword: boolean;
+  lastLoginAt: string | null;
+}
+/** `GET /api/admin/workspaces/:slug/members` */
+export interface AdminMembersResponse {
+  members: AdminMember[];
+}
+/** `POST /api/admin/workspaces/:slug/members`; a password is generated when none is given. */
+export interface AddMemberRequest {
+  email: string;
+  name: string;
+  password?: string;
+}
+/** `PATCH /api/admin/workspaces/:slug/members/:id` */
+export interface UpdateMemberRequest {
+  name?: string;
+  disabled?: boolean;
+  /** A new password; `true` generates one. */
+  password?: string | true;
+}
+/** A member change; `password` is present only when one was set, and is never shown again. */
+export interface MemberChangeResponse {
+  member: AdminMember;
+  password?: string;
+}
+
+export const DEFAULT_MAX_MEMBERS = 10;
+export const MAX_MEMBERS_LIMIT = 100;
 
 // ---- documents (M2) ----------------------------------------------------------
 
@@ -184,7 +270,7 @@ export interface BackupHeader {
   schema: { workspace: number; document: number };
 }
 
-/** Passkeys and sessions are deliberately absent: device-bound credential material. */
+/** Passwords, passkeys and sessions are deliberately absent: credential material. */
 export interface BackupMember {
   type: "member";
   id: string;

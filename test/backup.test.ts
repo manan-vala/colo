@@ -59,7 +59,7 @@ async function exportBackup(cookie: string): Promise<{ status: number; text: str
 
 function restore(body: string, options: { token?: string; overwrite?: boolean } = {}) {
   const { token = ADMIN_TOKEN, overwrite = false } = options;
-  return exports.default.fetch(`${ORIGIN}/api/admin/restore${overwrite ? "?overwrite=1" : ""}`, {
+  return exports.default.fetch(`${ORIGIN}/api/admin/restore?workspace=main${overwrite ? "&overwrite=1" : ""}`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/x-ndjson" },
     body,
@@ -152,7 +152,7 @@ describe("backup export", () => {
     expect(documents.find((d) => d.id === kept.id)?.deletedAt).toBeNull();
   });
 
-  it("never writes passkeys or sessions into a file someone downloads", async () => {
+  it("never writes passwords, passkeys or sessions into a file someone downloads", async () => {
     const { cookie } = await enroll("secret@example.com", "Secret");
     await newDoc(cookie);
     const { text, records } = await exportBackup(cookie);
@@ -162,6 +162,8 @@ describe("backup export", () => {
     expect([...new Set(records.map((r) => r.type))].filter((type) => !allowed.includes(type))).toEqual([]);
     expect(text).not.toContain("public_key");
     expect(text).not.toContain("credential");
+    expect(text).not.toContain("password");
+    expect(text).not.toContain("salt");
     // Nor may the live session token appear, in a file that lands in someone's Downloads folder.
     expect(text).not.toContain(cookie.split("=")[1]);
   });

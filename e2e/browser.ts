@@ -1,4 +1,4 @@
-/** Shared helpers for browser smoke tests: local Chrome + a virtual passkey authenticator. */
+/** Shared helpers for browser smoke tests: local Chrome + a virtual passkey authenticator (the owner's). */
 import { execFileSync } from "node:child_process";
 import puppeteer, { type Browser, type ElementHandle, type Page } from "puppeteer-core";
 
@@ -44,15 +44,82 @@ export async function newUser(browser: Browser): Promise<{ page: Page; errors: s
   return { page, errors };
 }
 
-/** Runs scripts/invite.ts and returns the link. */
-export function createInvite(email: string, name: string): string {
-  const args = ["scripts/invite.ts", "--email", email, "--name", name];
+/** Runs scripts/admin-enroll.ts and returns the owner's one-time passkey link. */
+export function ownerEnrollLink(): string {
+  const args = ["scripts/admin-enroll.ts"];
   if (BASE_URL.startsWith("http://localhost")) args.push("--local");
   else args.push("--url", BASE_URL);
   const output = execFileSync(process.execPath, args, { encoding: "utf8" });
-  const link = output.split(/\s+/).find((word) => word.includes("/invite#"));
-  if (!link) throw new Error(`No invite link in output:\n${output}`);
+  const link = output.split(/\s+/).find((word) => word.includes("/admin/enroll#"));
+  if (!link) throw new Error(`No enrollment link in output:
+${output}`);
   return link;
+}
+
+/** A JSON call from inside a page, so it carries that page's cookies and origin. */
+export async function pageApi<T>(page: Page, method: string, path: string, body?: unknown): Promise<T> {
+  const result = await page.evaluate(
+    async (method, path, body) => {
+      const response = await fetch(path, {
+        method,
+        headers: body === undefined ? undefined : { "Content-Type": "application/json" },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+      return { status: response.status, text: await response.text() };
+    },
+    method,
+    path,
+    body,
+  );
+  if (result.status >= 400) throw new Error(`${method} ${path} failed: ${result.status} ${result.text}`);
+  return (result.text ? JSON.parse(result.text) : undefined) as T;
+}
+
+const runStamp = Date.now().toString(36);
+let owner: Promise<{ page: Page; workspace: string }> | undefined;
+
+/**
+ * The owner, signed in to the dashboard in a browser context of its own, and a workspace made
+ * for this run (M9). A fresh workspace each run keeps repeated local runs clear of member caps.
+ */
+export function ownerSession(browser: Browser): Promise<{ page: Page; workspace: string }> {
+  owner ??= (async () => {
+    const user = await newUser(browser);
+    await user.page.goto(ownerEnrollLink());
+    await clickButton(user.page, "Create passkey");
+    await waitForText(user.page, "Workspaces");
+    const workspace = `e2e-${runStamp}`;
+    await pageApi(user.page, "POST", "/api/admin/workspaces", { slug: workspace, name: `E2E ${runStamp}`, maxMembers: 100 });
+    return { page: user.page, workspace };
+  })();
+  return owner;
+}
+
+export interface Credentials {
+  workspace: string;
+  email: string;
+  password: string;
+}
+
+/** Adds a member to this run's workspace through the owner's API and returns how they sign in. */
+export async function addMember(browser: Browser, name: string): Promise<Credentials> {
+  const { page, workspace } = await ownerSession(browser);
+  const stamp = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const email = `${name.toLowerCase().replace(/\W+/g, "-")}-${stamp}@example.com`;
+  const { password } = await pageApi<{ password: string }>(page, "POST", `/api/admin/workspaces/${workspace}/members`, {
+    email,
+    name,
+  });
+  return { workspace, email, password };
+}
+
+/** Fills in the sign-in form; the caller waits for whatever should follow. */
+export async function signIn(page: Page, { workspace, email, password }: Credentials) {
+  await page.goto(BASE_URL);
+  await page.locator("#sign-in-workspace").fill(workspace);
+  await page.locator("#sign-in-email").fill(email);
+  await page.locator("#sign-in-password").fill(password);
+  await clickButton(page, "Sign in");
 }
 
 export async function clickButton(page: Page, text: string) {
@@ -74,14 +141,13 @@ export function check(condition: unknown, message: string): asserts condition {
 }
 
 /**
- * Invites a new member, registers their passkey in a fresh browser context and waits for the
- * document list. Focus is emulated so headless editors publish cursors and selections.
+ * Adds a new member, signs them in with their password in a fresh browser context and waits for
+ * the document list. Focus is emulated so headless editors publish cursors and selections.
  */
 export async function enroll(browser: Browser, name: string) {
+  const credentials = await addMember(browser, name);
   const user = await newUser(browser);
-  const stamp = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-  await user.page.goto(createInvite(`${name.toLowerCase().replace(/\W+/g, "-")}-${stamp}@example.com`, name));
-  await clickButton(user.page, "Create passkey");
+  await signIn(user.page, credentials);
   await waitForText(user.page, "Documents");
   const cdp = await user.page.createCDPSession();
   await cdp.send("Emulation.setFocusEmulationEnabled", { enabled: true });

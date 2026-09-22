@@ -1,9 +1,10 @@
 /**
- * Creates a one-time invite link (plan §8.2).
+ * Creates a one-time link that adds an owner passkey for the dashboard at /admin (plan §8.2, M9).
  *
- *   npm run invite -- --email you@example.com --name "Your Name"
- *   npm run invite -- --email you@example.com --name "Your Name" --local
+ *   npm run admin:enroll
+ *   npm run admin:enroll -- --local
  *
+ * Open the link on the device that should hold the passkey; it works once and expires in a day.
  * The admin token is read from COLO_ADMIN_TOKEN, then ~/.colo/admin-token
  * (or ADMIN_TOKEN in .dev.vars with --local).
  */
@@ -17,8 +18,6 @@ const LOCAL_URL = "http://localhost:5173";
 
 const { values } = parseArgs({
   options: {
-    email: { type: "string" },
-    name: { type: "string" },
     url: { type: "string" },
     local: { type: "boolean", default: false },
   },
@@ -41,19 +40,17 @@ function adminToken(local: boolean): string {
   fail(`Set COLO_ADMIN_TOKEN or create ${file}`);
 }
 
-if (!values.email || !values.name) fail('Usage: npm run invite -- --email <email> --name "<name>" [--local]');
-
 const base = values.url ?? (values.local ? LOCAL_URL : PRODUCTION_URL);
-const response = await fetch(`${base}/api/admin/invites`, {
+const response = await fetch(`${base}/api/admin/enroll-token`, {
   method: "POST",
   headers: { "Content-Type": "application/json", Authorization: `Bearer ${adminToken(values.local)}` },
-  body: JSON.stringify({ email: values.email, name: values.name }),
+  body: "{}",
 });
 
-if (response.status === 404) fail("Invites are disabled: ADMIN_TOKEN is not set on the Worker.");
-if (!response.ok) fail(`Invite failed (${response.status}): ${await response.text()}`);
+if (response.status === 404) fail("Owner enrollment is disabled: ADMIN_TOKEN is not set on the Worker.");
+if (!response.ok) fail(`Enrollment link failed (${response.status}): ${await response.text()}`);
 
-const invite = (await response.json()) as { url: string; expiresAt: string };
-console.log(`Invite for ${values.name} <${values.email}>`);
-console.log(invite.url);
-console.log(`Single use; expires ${new Date(invite.expiresAt).toLocaleString()}. Send it privately.`);
+const link = (await response.json()) as { url: string; expiresAt: string };
+console.log("Owner passkey enrollment link:");
+console.log(link.url);
+console.log(`Single use; expires ${new Date(link.expiresAt).toLocaleString()}. Open it on your own device.`);

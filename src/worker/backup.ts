@@ -312,6 +312,9 @@ export async function applyRecords(records: BackupRecord[], ctx: RestoreContext)
           if (!known) throw new HttpError(400, "INVALID_BACKUP", `${field} ${id} is not a member in this backup`);
           return id;
         };
+        // The document's own object agrees first that it belongs here (M9): an index row for a
+        // document another workspace holds would let this workspace's members open it.
+        await ctx.toDocument(docId(record.id), "restore-claim", {});
         sql.exec(
           `INSERT INTO documents (id, title, created_at, created_by, updated_at, updated_by, deleted_at)
              VALUES (?, ?, ?, ?, ?, ?, ?)

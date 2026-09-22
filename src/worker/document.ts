@@ -13,7 +13,7 @@ import {
 } from "../shared/protocol";
 import { documentBackup, ndjsonResponse, restoreImage, restoreStateChunk, trimStateChunks } from "./backup";
 import { DOCUMENT_MIGRATIONS, migrate } from "./db";
-import { IDENTITY_HEADER, INTERNAL_HOST, decodeIdentity, type DocumentIdentity } from "./documents";
+import { IDENTITY_HEADER, INTERNAL_HOST, WORKSPACE_HEADER, decodeIdentity, type DocumentIdentity } from "./documents";
 import { HttpError, errorResponse, json, readJson } from "./http";
 import { serveImage, uploadImage } from "./images";
 import {
@@ -217,7 +217,7 @@ export class Document extends YServer<Env> {
     this.lastMetaPush = now;
     const title = this.document.getMap(SETTINGS_MAP).get(SETTINGS_KEYS.title);
     try {
-      await this.env.WORKSPACE.getByName("default").updateDocumentMeta(this.name, {
+      await this.env.WORKSPACE.getByName(this.workspace()).updateDocumentMeta(this.name, {
         title: typeof title === "string" && title.trim() ? title : null,
         updatedAt: this.lastEditAt ?? new Date(now).toISOString(),
         updatedBy: this.lastEditor,
@@ -382,15 +382,41 @@ export class Document extends YServer<Env> {
     return { restored: point, saved };
   }
 
+  /** The Workspace object whose index lists this document; documents from before M9 have none. */
+  private workspace(): string {
+    const row = this.ctx.storage.sql
+      .exec<{ do_name: string }>("SELECT do_name FROM doc_workspace WHERE id = 1")
+      .toArray()[0];
+    return row?.do_name ?? "default";
+  }
+
   private async onInternalRequest(request: Request, url: URL): Promise<Response> {
     if (request.method !== "POST") throw new HttpError(404, "NOT_FOUND");
     const { sql } = this.ctx.storage;
+    // Every internal request comes from the workspace that lists this document: the one that
+    // created it, or the one a backup is being restored into. A restore may not take a document
+    // that already holds content in another workspace — both would then list, and open, the same
+    // document. One with no content yet is new, and belongs to whoever writes it first.
+    const workspace = request.headers.get(WORKSPACE_HEADER);
+    if (workspace && workspace !== this.workspace()) {
+      if (url.pathname.startsWith("/restore-") && sql.exec("SELECT 1 FROM doc_state LIMIT 1").toArray().length > 0) {
+        throw new HttpError(409, "DOCUMENT_IN_OTHER_WORKSPACE", "This document belongs to another workspace");
+      }
+      sql.exec(
+        "INSERT INTO doc_workspace (id, do_name) VALUES (1, ?) ON CONFLICT (id) DO UPDATE SET do_name = excluded.do_name",
+        workspace,
+      );
+    }
     const body = (await request.json()) as Record<string, unknown>;
     switch (url.pathname) {
       // ---- backup (plan §8.5) ------------------------------------------------
       case "/export":
         // Straight from SQLite: exporting must not wake a hibernating document.
         return ndjsonResponse(documentBackup(sql, this.name, () => this.saves));
+
+      // The ownership check above is the whole of it; this only lets a restore ask first.
+      case "/restore-claim":
+        return Response.json({ ok: true });
 
       case "/restore-state":
         restoreStateChunk(sql, body);

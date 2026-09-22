@@ -21,7 +21,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "n
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Page } from "puppeteer-core";
-import { BASE_URL, check, clickButton, enroll, launch, press, pressTestId, waitForText } from "./browser.ts";
+import { BASE_URL, check, clickButton, enroll, launch, ownerSession, press, pressTestId, waitForText } from "./browser.ts";
 
 if (!BASE_URL.startsWith("http://localhost")) {
   throw new Error(`Refusing to run against ${BASE_URL}: this test restores over documents.`);
@@ -121,6 +121,7 @@ try {
   check(types[0] === "colo-backup" && types.at(-1) === "end", "the backup runs from a header to an end record");
   check(types.includes("state") && types.includes("image"), "it carries document state and image bytes");
   check(!types.includes("passkey") && !types.includes("session"), "it carries no passkeys or sessions");
+  check(!/password|salt/.test(text), "it carries no password hashes");
 
   // The way someone actually takes a backup: the account menu on the document list.
   const downloads = mkdtempSync(join(workDir, "downloads-"));
@@ -160,9 +161,13 @@ try {
   check((await editorText(a)).includes(WRECKED), "the document now holds the wrong text");
 
   // Restore, through the real script and the real HTTP endpoint.
-  const output = execFileSync(process.execPath, ["scripts/restore.ts", "--file", file, "--overwrite", "--url", BASE_URL], {
-    encoding: "utf8",
-  });
+  // Into the workspace the backup came from: the document belongs to it, so any other is refused.
+  const { workspace } = await ownerSession(browser);
+  const output = execFileSync(
+    process.execPath,
+    ["scripts/restore.ts", "--file", file, "--workspace", workspace, "--overwrite", "--url", BASE_URL],
+    { encoding: "utf8" },
+  );
   check(/Restored \d+ document\(s\)/.test(output), `the restore script finished (${output.trim().split("\n").at(-3) ?? ""})`);
 
   await a.goto(docUrl);

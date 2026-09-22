@@ -1,14 +1,15 @@
 /**
  * Restores a backup file into a local instance (plan §8.5).
  *
- *   npm run restore -- --file colo-backup-2026-09-20.ndjson
+ *   npm run restore -- --file colo-backup-2026-09-20.ndjson [--workspace main]
  *
- * Unlike `npm run invite`, this defaults to the local Worker: a restore writes over documents,
- * and the safe target is the one on your own machine. Pointing it anywhere else needs --url, and
- * a non-localhost URL needs --force as well.
+ * A backup holds one workspace, and goes into the workspace whose ID --workspace names (default
+ * "main"); create it in the owner's dashboard first. This defaults to the local Worker: a restore
+ * writes over documents, and the safe target is the one on your own machine. Pointing it anywhere
+ * else needs --url, and a non-localhost URL needs --force as well.
  *
- * It is only ever reachable where ADMIN_TOKEN is set. Production deletes that secret once both
- * passkeys are enrolled (§8.2), so there the endpoint does not exist. The token is read from
+ * It is only ever reachable where ADMIN_TOKEN is set. Production deletes that secret once the
+ * owner's passkey is enrolled (§8.2), so there the endpoint does not exist. The token is read from
  * COLO_ADMIN_TOKEN, then ADMIN_TOKEN in .dev.vars, then ~/.colo/admin-token.
  *
  * Nothing is ever deleted: rows in the backup win, rows not in it are left alone. Every write is
@@ -27,6 +28,7 @@ const { values } = parseArgs({
   options: {
     file: { type: "string" },
     url: { type: "string" },
+    workspace: { type: "string", default: "main" },
     overwrite: { type: "boolean", default: false },
     force: { type: "boolean", default: false },
   },
@@ -89,7 +91,9 @@ function isLocal(url: string): boolean {
 }
 
 async function main(): Promise<void> {
-  if (!values.file) fail("Usage: npm run restore -- --file <backup.ndjson> [--overwrite] [--url <url> --force]");
+  if (!values.file) {
+    fail("Usage: npm run restore -- --file <backup.ndjson> [--workspace <id>] [--overwrite] [--url <url> --force]");
+  }
 
   const base = values.url ?? LOCAL_URL;
   if (!isLocal(base) && !values.force) {
@@ -98,7 +102,8 @@ async function main(): Promise<void> {
 
   const records = read(values.file);
   const token = adminToken();
-  const url = `${base}/api/admin/restore${values.overwrite ? "?overwrite=1" : ""}`;
+  const workspace = encodeURIComponent(values.workspace ?? "main");
+  const url = `${base}/api/admin/restore?workspace=${workspace}${values.overwrite ? "&overwrite=1" : ""}`;
 
   const send = async (batch: BackupRecord[]): Promise<void> => {
     const response = await fetch(url, {
@@ -107,7 +112,12 @@ async function main(): Promise<void> {
       body: `${batch.map((record) => JSON.stringify(record)).join("\n")}\n`,
     });
     if (response.status === 404) {
-      fail("Restore is disabled: ADMIN_TOKEN is not set on this Worker (which is expected in production).");
+      const reason = await failure(response);
+      fail(
+        /workspace/i.test(reason)
+          ? `No workspace has the ID "${values.workspace}". Create it in the owner's dashboard first.`
+          : "Restore is disabled: ADMIN_TOKEN is not set on this Worker (which is expected in production).",
+      );
     }
     if (response.status === 409 && !values.overwrite) {
       fail(`${await failure(response)}\nRe-run with --overwrite to write the backup over what is there.`);
@@ -116,7 +126,7 @@ async function main(): Promise<void> {
   };
 
   const documents = records.filter((record) => record.type === "document").length;
-  console.log(`Restoring ${documents} document(s) from ${values.file} into ${base}`);
+  console.log(`Restoring ${documents} document(s) from ${values.file} into workspace ${values.workspace} at ${base}`);
   console.log("Do not open the app until this finishes.");
 
   // Batched by size, never splitting a document's records away from the `commit` that follows
@@ -145,8 +155,7 @@ async function main(): Promise<void> {
   if (batch.length > 0) await send(batch);
 
   console.log(`\nRestored ${done} document(s).`);
-  console.log("Passkeys are bound to a device and are never backed up, so enrol a fresh one:");
-  console.log(`  npm run invite -- --email <your email> --name "<Your Name>" --local`);
+  console.log("Passwords are never backed up: set each member a new one in the owner's dashboard (/admin).");
 }
 
 try {

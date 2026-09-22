@@ -281,7 +281,7 @@ describe("revocation", () => {
     await runInDurableObject(workspace, (_instance, state) => {
       state.storage.sql.exec("UPDATE sessions SET expires_at = ? WHERE member_id = ?", "2000-01-01T00:00:00.000Z", a.memberId);
     });
-    expect((await signIn(a.authenticator)).status).toBe(200);
+    expect((await signIn(a.email)).status).toBe(200);
     expect(await openedBy()).toBe(0);
   });
 

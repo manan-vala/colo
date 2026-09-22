@@ -1,6 +1,6 @@
-import { ChevronDown, Download, FileText, FileUp, LoaderCircle, LogOut, Pencil, Plus, Trash2 } from "lucide-react";
+import { ChevronDown, Download, FileText, FileUp, KeyRound, LoaderCircle, LogOut, Pencil, Plus, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { LIMITS, type DocumentSummary, type ListDocumentsResponse, type Member } from "../../shared/protocol";
+import { LIMITS, type DocumentSummary, type ListDocumentsResponse, type Member, type WorkspaceRef } from "../../shared/protocol";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import logo from "../assets/logo.svg";
 import { banner } from "./banner";
+import { ChangePasswordDialog } from "./ChangePasswordDialog";
 import { LiquidLogo } from "./LiquidLogo";
 import { ApiRequestError, api } from "../api";
 import { downloadBackup } from "../backup";
@@ -20,13 +21,24 @@ import { describeImportError, importAsNewDocument } from "../doc/imports";
 import { timeAgo } from "../lib/time";
 import { navigate } from "../router";
 
-export function Home({ member, onSignOut, onSessionEnded }: { member: Member; onSignOut: () => void; onSessionEnded: () => void }) {
+export function Home({
+  member,
+  workspace,
+  onSignOut,
+  onSessionEnded,
+}: {
+  member: Member;
+  workspace: WorkspaceRef;
+  onSignOut: () => void;
+  onSessionEnded: () => void;
+}) {
   const [documents, setDocuments] = useState<DocumentSummary[] | null>(null);
   const [filter, setFilter] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [importing, setImporting] = useState(false);
   const [backingUp, setBackingUp] = useState(false);
+  const [changingPassword, setChangingPassword] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
 
   const handleError = useCallback(
@@ -111,8 +123,17 @@ export function Home({ member, onSignOut, onSessionEnded }: { member: Member; on
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-56">
-              <DropdownMenuLabel className="truncate font-normal text-muted-foreground">{member.email}</DropdownMenuLabel>
+              <DropdownMenuLabel className="grid gap-0.5 font-normal">
+                <span className="truncate text-muted-foreground">{member.email}</span>
+                <span className="truncate text-xs text-muted-foreground" data-testid="workspace-name">
+                  {workspace.name} · {workspace.slug}
+                </span>
+              </DropdownMenuLabel>
               <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={() => setChangingPassword(true)}>
+                <KeyRound />
+                Change password
+              </DropdownMenuItem>
               <DropdownMenuItem onSelect={backUp} disabled={backingUp}>
                 {backingUp ? <LoaderCircle className="animate-spin" /> : <Download />}
                 {backingUp ? "Preparing…" : "Download backup"}
@@ -125,6 +146,7 @@ export function Home({ member, onSignOut, onSessionEnded }: { member: Member; on
             </DropdownMenuContent>
           </DropdownMenu>
         </header>
+        <ChangePasswordDialog open={changingPassword} onOpenChange={setChangingPassword} />
 
         <div className="h-40 w-full overflow-hidden sm:h-48">
           <img src={banner} alt="" className="size-full object-cover" />

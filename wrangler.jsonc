@@ -11,6 +11,7 @@
   },
   "durable_objects": {
     "bindings": [
+      { "name": "ADMIN", "class_name": "Admin" },
       { "name": "WORKSPACE", "class_name": "Workspace" },
       { "name": "DOCUMENT", "class_name": "Document" }
     ]
@@ -18,6 +19,7 @@
   // Declarative Durable Object lifecycle; replaces the older "migrations" array.
   // The Free plan only supports SQLite-backed objects.
   "exports": {
+    "Admin": { "type": "durable-object", "storage": "sqlite" },
     "Workspace": { "type": "durable-object", "storage": "sqlite" },
     "Document": { "type": "durable-object", "storage": "sqlite" }
   },

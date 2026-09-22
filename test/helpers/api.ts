@@ -1,5 +1,6 @@
-import { exports } from "cloudflare:workers";
-import type { CreateInviteResponse } from "../../src/shared/protocol";
+import { env, exports } from "cloudflare:workers";
+import type { EnrollTokenResponse } from "../../src/shared/protocol";
+import type { RpcResult } from "../../src/worker/workspace";
 import { createSoftAuthenticator, type SoftAuthenticator } from "./authenticator";
 
 /** Must match the bindings in vitest.config.ts. */
@@ -32,47 +33,60 @@ export function cookieFrom(response: Response): string {
   return (response.headers.get("Set-Cookie") ?? "").split(";")[0];
 }
 
-export async function invite(email: string, name: string): Promise<CreateInviteResponse & { token: string }> {
-  const response = await call("/api/admin/invites", {
-    body: { email, name },
-    origin: null,
-    headers: { Authorization: `Bearer ${ADMIN_TOKEN}` },
-  });
-  if (response.status !== 201) throw new Error(`invite failed: ${response.status} ${await response.text()}`);
-  const body = await response.json<CreateInviteResponse>();
-  return { ...body, token: body.url.split("#")[1] };
+export const PASSWORD = "correct horse battery staple";
+
+/** A Workspace RPC's value, or the failure it carried back (see `RpcResult`). */
+export function unwrap<T>(result: RpcResult<T>): T {
+  if (!result.ok) throw new Error(`${result.status} ${result.error}: ${result.message}`);
+  return result.value;
 }
 
 export interface Enrolled {
   cookie: string;
-  authenticator: SoftAuthenticator;
   memberId: string;
-  inviteToken: string;
+  email: string;
+  password: string;
 }
 
-/** Invites a member and registers a software passkey. */
+/**
+ * Adds a member to a workspace object and signs them in. It calls the workspace directly, not
+ * the owner's API, so that a test file's many members never meet a member cap; the owner's API
+ * has its own tests in `admin.test.ts`.
+ */
 export async function enroll(
   email = `m${crypto.randomUUID().slice(0, 8)}@example.com`,
   name = "Test Member",
+  { workspace = "main", object = "default" }: { workspace?: string; object?: string } = {},
 ): Promise<Enrolled> {
-  const { token, memberId } = await invite(email, name);
-  const authenticator = await createSoftAuthenticator();
-  const { challengeId, options } = await (
-    await call("/api/auth/register/options", { body: { inviteToken: token } })
-  ).json<{ challengeId: string; options: any }>();
-  const response = await call("/api/auth/register/verify", {
-    body: { inviteToken: token, challengeId, response: await authenticator.register(options, ORIGIN) },
-  });
-  if (response.status !== 200) throw new Error(`register failed: ${response.status} ${await response.text()}`);
-  return { cookie: cookieFrom(response), authenticator, memberId, inviteToken: token };
+  const { member } = unwrap(
+    await env.WORKSPACE.getByName(object).addMember({ email, name, password: PASSWORD }, Number.MAX_SAFE_INTEGER),
+  );
+  const response = await signIn(email, PASSWORD, workspace);
+  if (response.status !== 200) throw new Error(`sign-in failed: ${response.status} ${await response.text()}`);
+  return { cookie: cookieFrom(response), memberId: member.id, email, password: PASSWORD };
 }
 
-export async function signIn(authenticator: SoftAuthenticator): Promise<Response> {
-  const { challengeId, options } = await (await call("/api/auth/login/options", { body: {} })).json<{
+export function signIn(email: string, password = PASSWORD, workspace = "main"): Promise<Response> {
+  return call("/api/auth/login", { body: { workspace, email, password } });
+}
+
+/** Enrolls a software passkey as the owner and returns the owner's dashboard cookie. */
+export async function ownerSession(authenticator?: SoftAuthenticator): Promise<{ cookie: string; authenticator: SoftAuthenticator }> {
+  const tokenResponse = await call("/api/admin/enroll-token", {
+    body: {},
+    origin: null,
+    headers: { Authorization: `Bearer ${ADMIN_TOKEN}` },
+  });
+  if (tokenResponse.status !== 201) throw new Error(`enroll token failed: ${tokenResponse.status}`);
+  const token = (await tokenResponse.json<EnrollTokenResponse>()).url.split("#")[1];
+  const owner = authenticator ?? (await createSoftAuthenticator());
+  const { challengeId, options } = await (await call("/api/admin/enroll/options", { body: { token } })).json<{
     challengeId: string;
     options: any;
   }>();
-  return call("/api/auth/login/verify", {
-    body: { challengeId, response: await authenticator.authenticate(options, ORIGIN) },
+  const response = await call("/api/admin/enroll/verify", {
+    body: { token, challengeId, response: await owner.register(options, ORIGIN) },
   });
+  if (response.status !== 200) throw new Error(`owner enroll failed: ${response.status} ${await response.text()}`);
+  return { cookie: cookieFrom(response), authenticator: owner };
 }

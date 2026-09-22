@@ -75,6 +75,71 @@ export const WORKSPACE_MIGRATIONS: Migration[] = [
       ) WITHOUT ROWID;
     `);
   },
+  // 3: passwords replace invites and passkeys for members; this workspace's slug and name as the
+  // Admin object last sent them (M9). `passkeys`, `invites` and `auth_challenges` stay, unused.
+  (sql) => {
+    sql.exec(`
+      ALTER TABLE members ADD COLUMN password_hash TEXT;
+      ALTER TABLE members ADD COLUMN password_salt TEXT;
+      ALTER TABLE members ADD COLUMN password_iterations INTEGER;
+      ALTER TABLE members ADD COLUMN password_changed_at TEXT;
+      ALTER TABLE members ADD COLUMN failed_logins INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE members ADD COLUMN locked_until TEXT;
+      ALTER TABLE members ADD COLUMN last_login_at TEXT;
+      CREATE TABLE workspace_info (
+        id            INTEGER PRIMARY KEY CHECK (id = 1),
+        slug          TEXT NOT NULL,
+        name          TEXT NOT NULL,
+        disabled_at   TEXT
+      );
+    `);
+  },
+];
+
+/** The owner's dashboard: the workspace registry and the owner's passkeys (M9). */
+export const ADMIN_MIGRATIONS: Migration[] = [
+  (sql) => {
+    sql.exec(`
+      CREATE TABLE workspaces (
+        slug          TEXT PRIMARY KEY,
+        do_name       TEXT NOT NULL UNIQUE,
+        name          TEXT NOT NULL,
+        max_members   INTEGER NOT NULL,
+        disabled_at   TEXT,
+        created_at    TEXT NOT NULL,
+        synced        INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE TABLE passkeys (
+        credential_id TEXT PRIMARY KEY,
+        public_key    BLOB NOT NULL,
+        counter       INTEGER NOT NULL DEFAULT 0,
+        transports    TEXT,
+        created_at    TEXT NOT NULL,
+        last_used_at  TEXT
+      );
+      CREATE TABLE enroll_tokens (
+        token_hash    TEXT PRIMARY KEY,
+        expires_at    TEXT NOT NULL,
+        used_at       TEXT
+      );
+      CREATE TABLE challenges (
+        id            TEXT PRIMARY KEY,
+        challenge     TEXT NOT NULL,
+        purpose       TEXT NOT NULL CHECK (purpose IN ('enroll', 'login')),
+        expires_at    TEXT NOT NULL
+      );
+      CREATE TABLE sessions (
+        id_hash       TEXT PRIMARY KEY,
+        expires_at    TEXT NOT NULL
+      );
+    `);
+    // The workspace that existed before M9 keeps its object; `synced = 0` makes the Admin object
+    // send it this slug and name before anyone signs in to it.
+    sql.exec(
+      "INSERT INTO workspaces (slug, do_name, name, max_members, created_at) VALUES ('main', 'default', 'Main', 10, ?)",
+      new Date().toISOString(),
+    );
+  },
 ];
 
 export const DOCUMENT_MIGRATIONS: Migration[] = [
@@ -128,6 +193,15 @@ export const DOCUMENT_MIGRATIONS: Migration[] = [
         data            BLOB NOT NULL,
         PRIMARY KEY (point_id, seq)
       ) WITHOUT ROWID;
+    `);
+  },
+  // 5: which workspace object this document's metadata goes to (M9); absent means "default"
+  (sql) => {
+    sql.exec(`
+      CREATE TABLE doc_workspace (
+        id            INTEGER PRIMARY KEY CHECK (id = 1),
+        do_name       TEXT NOT NULL
+      );
     `);
   },
 ];

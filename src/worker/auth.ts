@@ -1,38 +1,22 @@
 import {
-  generateAuthenticationOptions,
-  generateRegistrationOptions,
-  verifyAuthenticationResponse,
-  verifyRegistrationResponse,
-  type AuthenticationResponseJSON,
-  type AuthenticatorTransport,
-  type RegistrationResponseJSON,
-} from "@simplewebauthn/server";
-import {
   SESSION_COOKIE,
-  type CreateInviteRequest,
-  type CreateInviteResponse,
-  type LoginVerifyRequest,
+  type ChangePasswordRequest,
+  type LoginRequest,
   type Member,
-  type RegisterOptionsRequest,
-  type RegisterVerifyRequest,
 } from "../shared/protocol";
-import { DAY, HttpError, MINUTE, base64url, isoIn, isoNow, parseCookies, randomToken, sha256Hex, ulid } from "./http";
+import { DAY, HttpError, MINUTE, isoIn, isoNow, parseCookies, randomToken, sha256Hex } from "./http";
+import { burnPasswordCheck, hashPassword, validatePassword, verifyPassword } from "./passwords";
 
-/** Invites, passkeys and sessions for the Workspace Durable Object (plan §5). */
+/** Passwords and sessions for one Workspace Durable Object (plan §5, M9). */
 
-const INVITE_TTL = DAY;
-const CHALLENGE_TTL = 5 * MINUTE;
 const SESSION_TTL = 30 * DAY;
 const SESSION_SLIDE_AFTER = DAY;
-const RP_NAME = "Colo";
-/** ES256 and RS256 (Windows Hello). */
-const ALGORITHMS = [-7, -257];
+/** Failed sign-ins in a row before an account is locked, and for how long. */
+export const MAX_FAILED_LOGINS = 5;
+export const LOCKOUT = 15 * MINUTE;
 
-export interface AuthEnv {
-  RP_ID: string;
-  ORIGIN: string;
-  ADMIN_TOKEN?: string;
-}
+/** Workspace object names: the pre-M9 workspace, or `ws-` and a ULID. */
+export const WORKSPACE_OBJECT_NAME = /^(?:default|ws-[0-9A-HJKMNP-TV-Z]{26})$/;
 
 export interface Session {
   member: Member;
@@ -42,255 +26,161 @@ export interface Session {
   setCookie?: string;
 }
 
-type MemberRow = {
+export type MemberRow = {
   id: string;
   email: string;
   display_name: string;
   disabled_at: string | null;
 };
 
-const toMember = (row: MemberRow): Member => ({ id: row.id, email: row.email, displayName: row.display_name });
+export const toMember = (row: MemberRow): Member => ({ id: row.id, email: row.email, displayName: row.display_name });
 
-export function sessionCookie(token: string): string {
-  return `${SESSION_COOKIE}=${token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL / 1000}`;
+/**
+ * The cookie carries the workspace object's name before the token, so the Worker can send each
+ * request to the right workspace without asking the Admin object (plan §2.1).
+ */
+export function sessionCookie(workspace: string, token: string): string {
+  return `${SESSION_COOKIE}=${workspace}.${token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL / 1000}`;
 }
 
 export function clearedSessionCookie(): string {
   return `${SESSION_COOKIE}=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0`;
 }
 
-function requireString(value: unknown, field: string, max = 320): string {
-  if (typeof value !== "string" || value.trim() === "" || value.length > max) {
-    throw new HttpError(400, "INVALID", `${field} is required`);
-  }
-  return value.trim();
+/** The workspace object name and token in a session cookie, or null if it is not one of ours. */
+export function readSessionCookie(cookieHeader: string | null): { workspace: string; token: string } | null {
+  const value = parseCookies(cookieHeader).get(SESSION_COOKIE);
+  if (!value || value.length > 200) return null;
+  const dot = value.indexOf(".");
+  const workspace = value.slice(0, dot);
+  const token = value.slice(dot + 1);
+  if (dot < 0 || !WORKSPACE_OBJECT_NAME.test(workspace) || !token) return null;
+  return { workspace, token };
 }
+
+type PasswordRow = MemberRow & {
+  password_hash: string | null;
+  password_salt: string | null;
+  password_iterations: number | null;
+  failed_logins: number;
+  locked_until: string | null;
+};
 
 export class Auth {
   constructor(
     private readonly storage: DurableObjectStorage,
-    private readonly env: AuthEnv,
+    /** This workspace object's name, written into its session cookies. */
+    private readonly workspace: string,
   ) {}
 
   private get sql() {
     return this.storage.sql;
   }
 
-  // ---- invites -------------------------------------------------------------
+  private workspaceDisabled(): boolean {
+    return (
+      this.sql.exec<{ disabled_at: string | null }>("SELECT disabled_at FROM workspace_info WHERE id = 1").toArray()[0]
+        ?.disabled_at != null
+    );
+  }
 
-  async createInvite(body: CreateInviteRequest): Promise<CreateInviteResponse> {
-    const email = requireString(body.email, "email").toLowerCase();
-    const name = requireString(body.name, "name", 80);
-    if (!/^[^@\s]+@[^@\s]+$/.test(email)) throw new HttpError(400, "INVALID", "email is invalid");
+  // ---- passwords -------------------------------------------------------------
 
-    const token = randomToken();
-    const tokenHash = await sha256Hex(token);
+  /**
+   * Every failure — unknown email, wrong password, locked or disabled account, disabled
+   * workspace — is the same `LOGIN_FAILED`, so sign-in never tells a stranger which addresses
+   * are members. An unknown email still spends a full hash for the same reason.
+   */
+  async login(body: LoginRequest): Promise<{ member: Member; cookie: string }> {
+    const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
+    const password = typeof body.password === "string" ? body.password.slice(0, 1024) : "";
+    const failed = () => new HttpError(401, "LOGIN_FAILED", "Wrong workspace, email or password");
+
+    const row = this.sql
+      .exec<PasswordRow>(
+        `SELECT id, email, display_name, disabled_at, password_hash, password_salt, password_iterations,
+                failed_logins, locked_until
+           FROM members WHERE email = ?`,
+        email,
+      )
+      .toArray()[0];
+    if (!row || !row.password_hash || !row.password_salt || !row.password_iterations) {
+      await burnPasswordCheck(password);
+      throw failed();
+    }
     const now = isoNow();
-    const expiresAt = isoIn(INVITE_TTL);
-    const memberId = this.storage.transactionSync(() => {
-      const existing = this.sql
-        .exec<{ id: string }>("SELECT id FROM members WHERE email = ?", email)
-        .toArray()[0];
-      const id = existing?.id ?? ulid();
-      if (!existing) {
+    const locked = row.locked_until !== null && row.locked_until > now;
+    const ok =
+      !locked &&
+      (await verifyPassword(password, {
+        hash: row.password_hash,
+        salt: row.password_salt,
+        iterations: row.password_iterations,
+      }));
+    if (!ok) {
+      if (!locked) {
+        const failures = row.failed_logins + 1;
         this.sql.exec(
-          "INSERT INTO members (id, email, display_name, created_at) VALUES (?, ?, ?, ?)",
-          id,
-          email,
-          name,
-          now,
+          "UPDATE members SET failed_logins = ?, locked_until = ? WHERE id = ?",
+          failures >= MAX_FAILED_LOGINS ? 0 : failures,
+          failures >= MAX_FAILED_LOGINS ? isoIn(LOCKOUT) : null,
+          row.id,
         );
       }
-      this.sql.exec(
-        "INSERT INTO invites (token_hash, member_id, expires_at) VALUES (?, ?, ?)",
-        tokenHash,
-        id,
-        expiresAt,
-      );
-      return id;
-    });
-    return { memberId, url: `${this.env.ORIGIN}/invite#${token}`, expiresAt };
-  }
-
-  private inviteMember(tokenHash: string): MemberRow {
-    const row = this.sql
-      .exec<MemberRow & { expires_at: string; used_at: string | null }>(
-        `SELECT m.id, m.email, m.display_name, m.disabled_at, i.expires_at, i.used_at
-           FROM invites i JOIN members m ON m.id = i.member_id
-          WHERE i.token_hash = ?`,
-        tokenHash,
-      )
-      .toArray()[0];
-    if (!row || row.used_at || row.expires_at <= isoNow() || row.disabled_at) {
-      throw new HttpError(400, "INVITE_INVALID", "This invite link is invalid, used or expired");
+      throw failed();
     }
-    return row;
+    if (row.disabled_at || this.workspaceDisabled()) throw failed();
+
+    const token = randomToken();
+    const idHash = await sha256Hex(token);
+    this.storage.transactionSync(() => {
+      this.sql.exec(
+        "UPDATE members SET failed_logins = 0, locked_until = NULL, last_login_at = ? WHERE id = ?",
+        now,
+        row.id,
+      );
+      this.insertSession(idHash, row.id, now);
+    });
+    return { member: toMember(row), cookie: sessionCookie(this.workspace, token) };
   }
 
-  // ---- challenges ------------------------------------------------------------
-
-  private storeChallenge(challenge: string, purpose: "register" | "login", memberId: string | null): string {
-    const id = ulid();
-    this.sql.exec("DELETE FROM auth_challenges WHERE expires_at <= ?", isoNow());
+  /** Sets a member's password; the caller decides which of their sessions end. */
+  async setPassword(memberId: string, password: string): Promise<void> {
+    const hashed = await hashPassword(validatePassword(password));
     this.sql.exec(
-      "INSERT INTO auth_challenges (id, challenge, purpose, member_id, expires_at) VALUES (?, ?, ?, ?, ?)",
-      id,
-      challenge,
-      purpose,
+      `UPDATE members SET password_hash = ?, password_salt = ?, password_iterations = ?, password_changed_at = ?,
+              failed_logins = 0, locked_until = NULL
+        WHERE id = ?`,
+      hashed.hash,
+      hashed.salt,
+      hashed.iterations,
+      isoNow(),
       memberId,
-      isoIn(CHALLENGE_TTL),
     );
-    return id;
   }
 
-  /** Deletes and returns a challenge so it can be used at most once. */
-  private consumeChallenge(id: unknown, purpose: "register" | "login"): { challenge: string; memberId: string | null } {
+  /** A member changing their own password; ends their other sessions and returns their hashes. */
+  async changePassword(session: Session, body: ChangePasswordRequest): Promise<string[]> {
+    const next = validatePassword(body.next, "The new password");
     const row = this.sql
-      .exec<{ challenge: string; purpose: string; member_id: string | null; expires_at: string }>(
-        "DELETE FROM auth_challenges WHERE id = ? RETURNING challenge, purpose, member_id, expires_at",
-        typeof id === "string" ? id : "",
+      .exec<PasswordRow>(
+        "SELECT password_hash, password_salt, password_iterations FROM members WHERE id = ?",
+        session.member.id,
       )
       .toArray()[0];
-    if (!row || row.purpose !== purpose || row.expires_at <= isoNow()) {
-      throw new HttpError(400, "CHALLENGE_INVALID", "The sign-in attempt expired; try again");
-    }
-    return { challenge: row.challenge, memberId: row.member_id };
-  }
-
-  // ---- registration ----------------------------------------------------------
-
-  async registrationOptions(body: RegisterOptionsRequest) {
-    const invite = this.inviteMember(await sha256Hex(requireString(body.inviteToken, "inviteToken", 128)));
-    const existing = this.sql
-      .exec<{ credential_id: string; transports: string | null }>(
-        "SELECT credential_id, transports FROM passkeys WHERE member_id = ?",
-        invite.id,
-      )
-      .toArray();
-    const options = await generateRegistrationOptions({
-      rpName: RP_NAME,
-      rpID: this.env.RP_ID,
-      userName: invite.email,
-      userDisplayName: invite.display_name,
-      userID: new Uint8Array(new TextEncoder().encode(invite.id)),
-      attestationType: "none",
-      excludeCredentials: existing.map((p) => ({
-        id: p.credential_id,
-        transports: p.transports ? (JSON.parse(p.transports) as AuthenticatorTransport[]) : undefined,
-      })),
-      authenticatorSelection: { residentKey: "required", userVerification: "required" },
-      supportedAlgorithmIDs: ALGORITHMS,
-    });
-    return { challengeId: this.storeChallenge(options.challenge, "register", invite.id), options };
-  }
-
-  async verifyRegistration(body: RegisterVerifyRequest): Promise<{ member: Member; cookie: string }> {
-    const tokenHash = await sha256Hex(requireString(body.inviteToken, "inviteToken", 128));
-    const challenge = this.consumeChallenge(body.challengeId, "register");
-    const invite = this.inviteMember(tokenHash);
-    if (challenge.memberId !== invite.id) throw new HttpError(400, "CHALLENGE_INVALID");
-
-    let verification;
-    try {
-      verification = await verifyRegistrationResponse({
-        response: body.response as RegistrationResponseJSON,
-        expectedChallenge: challenge.challenge,
-        expectedOrigin: this.env.ORIGIN,
-        expectedRPID: this.env.RP_ID,
-        requireUserVerification: true,
-        supportedAlgorithmIDs: ALGORITHMS,
-      });
-    } catch (error) {
-      throw new HttpError(400, "VERIFICATION_FAILED", error instanceof Error ? error.message : undefined);
-    }
-    if (!verification.verified) throw new HttpError(400, "VERIFICATION_FAILED");
-
-    const { credential } = verification.registrationInfo;
-    const token = randomToken();
-    const now = isoNow();
-    const idHash = await sha256Hex(token);
-    this.storage.transactionSync(() => {
-      // Re-check inside the transaction: another request may have used the invite meanwhile.
-      const used = this.sql.exec(
-        "UPDATE invites SET used_at = ? WHERE token_hash = ? AND used_at IS NULL AND expires_at > ?",
-        now,
-        tokenHash,
-        now,
-      );
-      if (used.rowsWritten === 0) throw new HttpError(400, "INVITE_INVALID", "This invite link was already used");
-      this.sql.exec(
-        "INSERT INTO passkeys (credential_id, member_id, public_key, counter, transports, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-        credential.id,
-        invite.id,
-        credential.publicKey,
-        credential.counter,
-        credential.transports ? JSON.stringify(credential.transports) : null,
-        now,
-      );
-      this.insertSession(idHash, invite.id, now);
-    });
-    return { member: toMember(invite), cookie: sessionCookie(token) };
-  }
-
-  // ---- sign-in ---------------------------------------------------------------
-
-  async loginOptions() {
-    const options = await generateAuthenticationOptions({ rpID: this.env.RP_ID, userVerification: "required" });
-    return { challengeId: this.storeChallenge(options.challenge, "login", null), options };
-  }
-
-  async verifyLogin(body: LoginVerifyRequest): Promise<{ member: Member; cookie: string }> {
-    const challenge = this.consumeChallenge(body.challengeId, "login");
-    const response = body.response as AuthenticationResponseJSON;
-    const passkey = this.sql
-      .exec<MemberRow & { credential_id: string; public_key: ArrayBuffer; counter: number; transports: string | null }>(
-        `SELECT p.credential_id, p.public_key, p.counter, p.transports, m.id, m.email, m.display_name, m.disabled_at
-           FROM passkeys p JOIN members m ON m.id = p.member_id
-          WHERE p.credential_id = ?`,
-        typeof response?.id === "string" ? response.id : "",
-      )
-      .toArray()[0];
-    if (!passkey || passkey.disabled_at) throw new HttpError(401, "UNKNOWN_PASSKEY", "This passkey is not registered");
-
-    // Registration used the member ID as the WebAuthn user handle.
-    const userHandle = response.response?.userHandle;
-    if (userHandle && userHandle !== base64url(new TextEncoder().encode(passkey.id))) {
-      throw new HttpError(401, "VERIFICATION_FAILED", "Passkey does not belong to this member");
-    }
-
-    let verification;
-    try {
-      verification = await verifyAuthenticationResponse({
-        response,
-        expectedChallenge: challenge.challenge,
-        expectedOrigin: this.env.ORIGIN,
-        expectedRPID: this.env.RP_ID,
-        requireUserVerification: true,
-        credential: {
-          id: passkey.credential_id,
-          publicKey: new Uint8Array(passkey.public_key),
-          counter: passkey.counter,
-          transports: passkey.transports ? JSON.parse(passkey.transports) : undefined,
-        },
-      });
-    } catch (error) {
-      throw new HttpError(401, "VERIFICATION_FAILED", error instanceof Error ? error.message : undefined);
-    }
-    if (!verification.verified) throw new HttpError(401, "VERIFICATION_FAILED");
-
-    const token = randomToken();
-    const now = isoNow();
-    const idHash = await sha256Hex(token);
-    this.storage.transactionSync(() => {
-      this.sql.exec(
-        "UPDATE passkeys SET counter = ?, last_used_at = ? WHERE credential_id = ?",
-        verification.authenticationInfo.newCounter,
-        now,
-        passkey.credential_id,
-      );
-      this.insertSession(idHash, passkey.id, now);
-    });
-    return { member: toMember(passkey), cookie: sessionCookie(token) };
+    const current = typeof body.current === "string" ? body.current.slice(0, 1024) : "";
+    const ok =
+      row?.password_hash &&
+      row.password_salt &&
+      row.password_iterations &&
+      (await verifyPassword(current, {
+        hash: row.password_hash,
+        salt: row.password_salt,
+        iterations: row.password_iterations,
+      }));
+    if (!ok) throw new HttpError(400, "WRONG_PASSWORD", "The current password is wrong");
+    await this.setPassword(session.member.id, next);
+    return this.endSessions(session.member.id, session.idHash);
   }
 
   // ---- sessions --------------------------------------------------------------
@@ -307,16 +197,35 @@ export class Auth {
     );
   }
 
-  /** Resolves the session cookie; slides the expiry at most once a day. Returns null if not signed in. */
+  /** Deletes a member's sessions, all or all but one, and returns their hashes to close sockets. */
+  endSessions(memberId: string, keep: string | null = null): string[] {
+    return this.sql
+      .exec<{ id_hash: string }>(
+        "DELETE FROM sessions WHERE member_id = ? AND id_hash IS NOT ? RETURNING id_hash",
+        memberId,
+        keep,
+      )
+      .toArray()
+      .map((row) => row.id_hash);
+  }
+
+  /** Deletes every session in the workspace (it was disabled) and returns their hashes. */
+  endAllSessions(): string[] {
+    return this.sql
+      .exec<{ id_hash: string }>("DELETE FROM sessions RETURNING id_hash")
+      .toArray()
+      .map((row) => row.id_hash);
+  }
+
   /**
    * The member behind a session cookie. Extends the session at most once a day; callers that
    * cannot return the re-issued cookie to the browser pass `slide: false`, or the server's
    * expiry would move while the browser's cookie does not.
    */
   async authenticate(cookieHeader: string | null, { slide = true }: { slide?: boolean } = {}): Promise<Session | null> {
-    const token = parseCookies(cookieHeader).get(SESSION_COOKIE);
-    if (!token || token.length > 128) return null;
-    const idHash = await sha256Hex(token);
+    const cookie = readSessionCookie(cookieHeader);
+    if (!cookie || cookie.workspace !== this.workspace || cookie.token.length > 128) return null;
+    const idHash = await sha256Hex(cookie.token);
     const now = isoNow();
     const row = this.sql
       .exec<MemberRow & { expires_at: string; last_seen_at: string }>(
@@ -327,7 +236,7 @@ export class Auth {
         now,
       )
       .toArray()[0];
-    if (!row) return null;
+    if (!row || this.workspaceDisabled()) return null;
 
     const session: Session = { member: toMember(row), idHash, expiresAt: row.expires_at };
     if (slide && Date.parse(now) - Date.parse(row.last_seen_at) >= SESSION_SLIDE_AFTER) {
@@ -338,16 +247,16 @@ export class Auth {
         now,
         idHash,
       );
-      session.setCookie = sessionCookie(token);
+      session.setCookie = sessionCookie(this.workspace, cookie.token);
     }
     return session;
   }
 
   /** Deletes the session; returns its hash so callers can close its sockets. */
   async logout(cookieHeader: string | null): Promise<string | null> {
-    const token = parseCookies(cookieHeader).get(SESSION_COOKIE);
-    if (!token) return null;
-    const idHash = await sha256Hex(token);
+    const cookie = readSessionCookie(cookieHeader);
+    if (!cookie || cookie.workspace !== this.workspace) return null;
+    const idHash = await sha256Hex(cookie.token);
     this.sql.exec("DELETE FROM sessions WHERE id_hash = ?", idHash);
     return idHash;
   }

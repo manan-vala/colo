@@ -41,6 +41,9 @@ export function decodeIdentity(value: string | null): DocumentIdentity | null {
 /** Hostname for Workspace → Document internal requests; never produced by the public router. */
 export const INTERNAL_HOST = "document.internal";
 
+/** Names the workspace object behind an internal request, so the document reports back to it (M9). */
+export const WORKSPACE_HEADER = "x-colo-workspace";
+
 export interface DocumentMeta {
   title: string | null;
   updatedAt: string;
@@ -103,6 +106,8 @@ export class Documents {
   constructor(
     private readonly storage: DurableObjectStorage,
     private readonly env: Env,
+    /** The Workspace object this index belongs to. */
+    private readonly workspace: string,
   ) {}
 
   private get sql() {
@@ -227,7 +232,7 @@ export class Documents {
     const stub = this.env.DOCUMENT.getByName(id, { locationHint: "apac" });
     return stub.fetch(`https://${INTERNAL_HOST}/${action}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", [WORKSPACE_HEADER]: this.workspace },
       body: JSON.stringify(body),
     });
   }

@@ -15,7 +15,7 @@
     "ci": "npm run typecheck && npm test && vite build",
     "deploy": "npm run build && wrangler deploy",
     "cf-typegen": "wrangler types",
-    "invite": "node scripts/invite.ts",
+    "admin:enroll": "node scripts/admin-enroll.ts",
     "restore": "node scripts/restore.ts",
     "e2e:auth": "node e2e/auth.ts",
     "e2e:collab": "node e2e/collab.ts",

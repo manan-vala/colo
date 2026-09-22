@@ -1,159 +1,114 @@
 import { env, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import type { MeResponse } from "../src/shared/protocol";
-import { ADMIN_TOKEN, ORIGIN, call, cookieFrom, enroll, invite, signIn } from "./helpers/api";
-import { createSoftAuthenticator } from "./helpers/authenticator";
+import { PASSWORD, call, cookieFrom, enroll, signIn } from "./helpers/api";
 
 const workspace = () => env.WORKSPACE.getByName("default");
 const LONG_AGO = "2000-01-01T00:00:00.000Z";
 
-async function registrationOptions(inviteToken: string) {
-  const response = await call("/api/auth/register/options", { body: { inviteToken } });
-  return response.json<{ challengeId: string; options: any }>();
+async function errorOf(response: Response): Promise<string> {
+  return (await response.json<{ error: string }>()).error;
 }
 
-describe("admin invites", () => {
-  it("requires the admin token", async () => {
-    const body = { email: "x@example.com", name: "X" };
-    expect((await call("/api/admin/invites", { body, origin: null })).status).toBe(401);
-    const wrong = await call("/api/admin/invites", { body, origin: null, headers: { Authorization: "Bearer nope" } });
-    expect(wrong.status).toBe(401);
-  });
-
-  it("creates a member and a one-time link on the configured origin, storing only a hash", async () => {
-    const result = await invite("new@example.com", "New Person");
-    expect(result.url.startsWith(`${ORIGIN}/invite#`)).toBe(true);
-    expect(result.token.length).toBeGreaterThanOrEqual(43);
-    await runInDurableObject(workspace(), (_instance, state) => {
-      const rows = state.storage.sql
-        .exec<{ token_hash: string }>("SELECT token_hash FROM invites WHERE member_id = ?", result.memberId)
-        .toArray();
-      expect(rows).toHaveLength(1);
-      expect(rows[0].token_hash).not.toBe(result.token);
-    });
-  });
-
-  it("reuses the member for a second invite to the same email", async () => {
-    const first = await invite("again@example.com", "Again");
-    const second = await invite("AGAIN@example.com", "Again");
-    expect(second.memberId).toBe(first.memberId);
-  });
-
-  it("rejects invalid input", async () => {
-    const response = await call("/api/admin/invites", {
-      body: { email: "not-an-email", name: "X" },
-      origin: null,
-      headers: { Authorization: `Bearer ${ADMIN_TOKEN}` },
-    });
-    expect(response.status).toBe(400);
-  });
-});
-
-describe("registration", () => {
-  it("registers a passkey, sets a hardened session cookie and signs the member in", async () => {
-    const { token } = await invite("reg@example.com", "Reg");
-    const authenticator = await createSoftAuthenticator();
-    const { challengeId, options } = await registrationOptions(token);
-    expect(options.rp.id).toBe("colo.example");
-    expect(options.authenticatorSelection).toMatchObject({ residentKey: "required", userVerification: "required" });
-
-    const response = await call("/api/auth/register/verify", {
-      body: { inviteToken: token, challengeId, response: await authenticator.register(options, ORIGIN) },
-    });
+describe("password sign-in", () => {
+  it("signs in to the named workspace and sets a hardened cookie that names it", async () => {
+    const { email } = await enroll("reg@example.com", "Reg");
+    const response = await signIn(email);
     expect(response.status).toBe(200);
     const setCookie = response.headers.get("Set-Cookie")!;
-    expect(setCookie).toMatch(/^__Host-colo_session=[\w-]{43};/);
+    expect(setCookie).toMatch(/^__Host-colo_session=default\.[\w-]{43};/);
     for (const attribute of ["HttpOnly", "Secure", "SameSite=Strict", "Path=/", "Max-Age=2592000"]) {
       expect(setCookie).toContain(attribute);
     }
-
-    const me = await call("/api/me", { cookie: cookieFrom(response) });
-    expect(me.status).toBe(200);
-    expect((await me.json<MeResponse>()).member).toMatchObject({ email: "reg@example.com", displayName: "Reg" });
+    const me = await (await call("/api/me", { cookie: cookieFrom(response) })).json<MeResponse>();
+    expect(me.member).toMatchObject({ email: "reg@example.com", displayName: "Reg" });
+    expect(me.workspace).toEqual({ slug: "main", name: "Main" });
   });
 
-  it("uses each invite only once", async () => {
-    const { inviteToken } = await enroll();
-    const again = await call("/api/auth/register/options", { body: { inviteToken } });
-    expect(again.status).toBe(400);
-    expect((await again.json<{ error: string }>()).error).toBe("INVITE_INVALID");
-  });
-
-  it("rejects expired invites", async () => {
-    const { token, memberId } = await invite("expired@example.com", "Old");
-    await runInDurableObject(workspace(), (_instance, state) => {
-      state.storage.sql.exec("UPDATE invites SET expires_at = ? WHERE member_id = ?", LONG_AGO, memberId);
+  it("ignores case and spaces around the email and workspace", async () => {
+    await enroll("mixed@example.com", "Mixed");
+    const response = await call("/api/auth/login", {
+      body: { workspace: " MAIN ", email: " Mixed@Example.com ", password: PASSWORD },
     });
-    expect((await call("/api/auth/register/options", { body: { inviteToken: token } })).status).toBe(400);
-  });
-
-  it("rejects a response created for another origin", async () => {
-    const { token } = await invite("phish@example.com", "Phish");
-    const authenticator = await createSoftAuthenticator();
-    const { challengeId, options } = await registrationOptions(token);
-    const response = await call("/api/auth/register/verify", {
-      body: { inviteToken: token, challengeId, response: await authenticator.register(options, "https://evil.example") },
-    });
-    expect(response.status).toBe(400);
-    expect((await response.json<{ error: string }>()).error).toBe("VERIFICATION_FAILED");
-  });
-
-  it("requires user verification", async () => {
-    const { token } = await invite("nouv@example.com", "No UV");
-    const authenticator = await createSoftAuthenticator({ userVerified: false });
-    const { challengeId, options } = await registrationOptions(token);
-    const response = await call("/api/auth/register/verify", {
-      body: { inviteToken: token, challengeId, response: await authenticator.register(options, ORIGIN) },
-    });
-    expect(response.status).toBe(400);
-  });
-
-  it("does not accept a challenge twice", async () => {
-    const { token } = await invite("twice@example.com", "Twice");
-    const authenticator = await createSoftAuthenticator();
-    const { challengeId, options } = await registrationOptions(token);
-    const credential = await authenticator.register(options, ORIGIN);
-    const body = { inviteToken: token, challengeId, response: credential };
-    expect((await call("/api/auth/register/verify", { body })).status).toBe(200);
-    expect((await call("/api/auth/register/verify", { body })).status).toBe(400);
-  });
-});
-
-describe("sign-in", () => {
-  it("signs in with a registered passkey and stores the new counter", async () => {
-    const { authenticator, memberId } = await enroll();
-    const response = await signIn(authenticator);
     expect(response.status).toBe(200);
-    expect((await call("/api/me", { cookie: cookieFrom(response) })).status).toBe(200);
+  });
+
+  it("answers a wrong password, an unknown email and an unknown workspace alike", async () => {
+    const { email } = await enroll();
+    for (const response of [
+      await signIn(email, "not the password at all"),
+      await signIn("nobody@example.com"),
+      await signIn(email, PASSWORD, "no-such-workspace"),
+      await call("/api/auth/login", { body: {} }),
+    ]) {
+      expect(response.status).toBe(401);
+      expect(await errorOf(response)).toBe("LOGIN_FAILED");
+    }
+  });
+
+  it("stores a salted hash, never the password", async () => {
+    const { memberId } = await enroll();
     await runInDurableObject(workspace(), (_instance, state) => {
       const row = state.storage.sql
-        .exec<{ counter: number }>("SELECT counter FROM passkeys WHERE member_id = ?", memberId)
+        .exec<{ password_hash: string; password_salt: string; password_iterations: number }>(
+          "SELECT password_hash, password_salt, password_iterations FROM members WHERE id = ?",
+          memberId,
+        )
         .one();
-      expect(row.counter).toBe(1);
+      expect(row.password_hash).not.toContain(PASSWORD);
+      expect(row.password_salt.length).toBeGreaterThan(0);
+      expect(row.password_iterations).toBe(100_000);
     });
   });
 
-  it("rejects unknown passkeys", async () => {
-    const stranger = await createSoftAuthenticator();
-    await stranger.register({ challenge: "x", rp: { id: "colo.example" }, user: { id: "someone" } }, ORIGIN);
-    expect((await signIn(stranger)).status).toBe(401);
+  it("locks an account after five failures in a row, even against the right password", async () => {
+    const { email, memberId } = await enroll();
+    for (let i = 0; i < 5; i++) expect((await signIn(email, "wrong password!")).status).toBe(401);
+    expect((await signIn(email)).status).toBe(401);
+
+    await runInDurableObject(workspace(), (_instance, state) => {
+      state.storage.sql.exec("UPDATE members SET locked_until = ? WHERE id = ?", LONG_AGO, memberId);
+    });
+    expect((await signIn(email)).status).toBe(200);
   });
 
-  it("rejects replayed assertions", async () => {
-    const { authenticator } = await enroll();
-    const { challengeId, options } = await (await call("/api/auth/login/options", { body: {} })).json<any>();
-    const body = { challengeId, response: await authenticator.authenticate(options, ORIGIN) };
-    expect((await call("/api/auth/login/verify", { body })).status).toBe(200);
-    expect((await call("/api/auth/login/verify", { body })).status).toBe(400);
-  });
-
-  it("refuses disabled members and their existing sessions", async () => {
-    const { authenticator, memberId, cookie } = await enroll();
+  it("refuses disabled members and ends their existing sessions", async () => {
+    const { email, memberId, cookie } = await enroll();
     await runInDurableObject(workspace(), (_instance, state) => {
       state.storage.sql.exec("UPDATE members SET disabled_at = ? WHERE id = ?", new Date().toISOString(), memberId);
     });
     expect((await call("/api/me", { cookie })).status).toBe(401);
-    expect((await signIn(authenticator)).status).toBe(401);
+    expect((await signIn(email)).status).toBe(401);
+  });
+
+  it("refuses a member carried over without a password", async () => {
+    await runInDurableObject(workspace(), (_instance, state) => {
+      state.storage.sql.exec(
+        "INSERT INTO members (id, email, display_name, created_at) VALUES ('01HOLDMEMBER00000000000000', 'old@example.com', 'Old', ?)",
+        LONG_AGO,
+      );
+    });
+    expect((await signIn("old@example.com")).status).toBe(401);
+  });
+});
+
+describe("changing a password", () => {
+  it("needs the current password, then signs out every other session", async () => {
+    const { email, cookie } = await enroll();
+    const other = cookieFrom(await signIn(email));
+    const next = "a brand new passphrase";
+
+    const wrong = await call("/api/auth/password", { body: { current: "nope", next }, cookie });
+    expect(wrong.status).toBe(400);
+    expect(await errorOf(wrong)).toBe("WRONG_PASSWORD");
+    const short = await call("/api/auth/password", { body: { current: PASSWORD, next: "short" }, cookie });
+    expect(await errorOf(short)).toBe("INVALID_PASSWORD");
+
+    expect((await call("/api/auth/password", { body: { current: PASSWORD, next }, cookie })).status).toBe(200);
+    expect((await call("/api/me", { cookie })).status).toBe(200);
+    expect((await call("/api/me", { cookie: other })).status).toBe(401);
+    expect((await signIn(email)).status).toBe(401);
+    expect((await signIn(email, next)).status).toBe(200);
   });
 });
 
@@ -161,6 +116,15 @@ describe("sessions", () => {
   it("returns 401 without a valid session", async () => {
     expect((await call("/api/me")).status).toBe(401);
     expect((await call("/api/me", { cookie: "__Host-colo_session=forged" })).status).toBe(401);
+    expect((await call("/api/me", { cookie: "__Host-colo_session=default.forged" })).status).toBe(401);
+    expect((await call("/api/me", { cookie: "__Host-colo_session=../admin.forged" })).status).toBe(401);
+  });
+
+  it("does not accept a session from one workspace in another", async () => {
+    const { cookie } = await enroll();
+    const token = cookie.split(".")[1];
+    const moved = `__Host-colo_session=ws-01ARZ3NDEKTSV4RRFFQ69G5FAV.${token}`;
+    expect((await call("/api/me", { cookie: moved })).status).toBe(401);
   });
 
   it("logs out and clears the cookie", async () => {
@@ -184,7 +148,7 @@ describe("sessions", () => {
       );
     });
     const slid = await call("/api/me", { cookie });
-    expect(slid.headers.get("Set-Cookie")).toContain("__Host-colo_session=");
+    expect(slid.headers.get("Set-Cookie")).toContain(`${cookie};`);
     await runInDurableObject(workspace(), (_instance, state) => {
       const row = state.storage.sql
         .exec<{ expires_at: string }>("SELECT expires_at FROM sessions WHERE member_id = ?", memberId)
@@ -228,7 +192,9 @@ describe("sessions", () => {
 
 describe("origin checks", () => {
   it("rejects state-changing requests without Colo's origin", async () => {
-    expect((await call("/api/auth/login/options", { body: {}, origin: "https://evil.example" })).status).toBe(403);
-    expect((await call("/api/auth/login/options", { body: {}, origin: null })).status).toBe(403);
+    const body = { workspace: "main", email: "x@example.com", password: PASSWORD };
+    expect((await call("/api/auth/login", { body, origin: "https://evil.example" })).status).toBe(403);
+    expect((await call("/api/auth/login", { body, origin: null })).status).toBe(403);
+    expect((await call("/api/admin/workspaces", { body: {}, origin: null })).status).toBe(403);
   });
 });
