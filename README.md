@@ -1,14 +1,14 @@
 # Colo
 
-A private document editor for two people, in the style of Google Docs: simultaneous typing with live cursors, rich formatting, real pages with headers and footers, comments, and DOCX import/export.
+A private document editor for small groups, in the style of Google Docs: simultaneous typing with live cursors, rich formatting, real pages with headers and footers, comments, and DOCX import/export.
 
 Runs entirely on the **Cloudflare Workers Free plan** at $0/month, using only open-source libraries:
 
 - **Workers Static Assets** serve the React SPA (Tiptap editor, shadcn/ui).
 - A thin **Worker** routes `/api/*` and authorises document connections.
-- A **Workspace Durable Object** holds members, passkeys, sessions and the document index.
+- One **Workspace Durable Object** per workspace holds its members, passwords, sessions and document index; an **Admin Durable Object** keeps the list of workspaces and the owner's passkey.
 - One **Document Durable Object** per document syncs edits with **Yjs** over hibernating **WebSockets** and stores the document in its embedded **SQLite** database.
-- Sign-in is invite-only with **passkeys**.
+- Members sign in with a **workspace ID, email and password** the owner set in the dashboard at `/admin`; the owner signs in there with a **passkey**.
 
 ## Docs
 
@@ -18,6 +18,7 @@ Runs entirely on the **Cloudflare Workers Free plan** at $0/month, using only op
 - [ADR 0003 — Collaborative document engine: Tiptap + Yjs on per-document Durable Objects](docs/decisions/0003-collaborative-document-engine.md)
 - [ADR 0004 — Our own pagination engine instead of tiptap-pagination-plus](docs/decisions/0004-own-pagination-engine.md)
 - [ADR 0005 — Our own DOCX reader instead of mammoth; docx for export](docs/decisions/0005-own-docx-reader.md)
+- [ADR 0006 — Workspaces, password sign-in and an owner's dashboard](docs/decisions/0006-workspaces-and-password-sign-in.md)
 
 ## Development
 
@@ -33,14 +34,14 @@ npm run build        # type-check, then build client and Worker into dist/
 npm run preview      # serve the production build locally (applies public/_headers)
 npm run deploy       # build, then wrangler deploy
 npm run cf-typegen   # regenerate worker-configuration.d.ts after editing wrangler.jsonc
-npm run invite -- --email <email> --name "<name>" [--local]   # one-time invite link
-npm run restore -- --file <backup.ndjson> [--overwrite]       # restore a backup into the local instance
+npm run admin:enroll [-- --local]   # one-time link for the owner's dashboard passkey
+npm run restore -- --file <backup.ndjson> [--workspace <id>] [--overwrite]   # restore a backup into a local workspace
 ```
 
 Browser smoke tests drive the local Chrome with virtual passkeys (start `npm run dev` or `npx vite preview --port 5173` first):
 
 ```bash
-npm run e2e:auth     # invite → passkey → sign out → sign in
+npm run e2e:auth     # owner adds a member → password sign-in → change password → sign in again
 npm run e2e:collab   # two people co-edit a document
 npm run e2e:formatting   # every toolbar and menu action reaches the other browser (M3)
 npm run e2e:pages    # 50-page document, headers/footers, page breaks, print (M4); PDF_PATH=… saves the PDF
@@ -92,4 +93,6 @@ M4 added A4/Letter pages in portrait or landscape, margins, one-line headers and
 
 **M7 (import and export):** Import file on the list page or File → Open file brings in Word (.docx), Markdown, web page or text files as new documents (File → Replace with file swaps a document's content, keeping the old version as a restore point). Word files keep their fonts, colours, sizes, alignment, lists, tables with merged cells, images, links, page setup, header and footer page numbers, and comments with replies; an import report lists anything converted or left out. File → Download saves Word, PDF, web page, Markdown or plain text.
 
-**M8 (hardening):** the account menu on the document list has **Download backup**, which saves every member, every document — soft-deleted ones included — and every image as one NDJSON file; `npm run restore -- --file <backup>` puts it back into a local instance, keeping document ids so images still resolve. Passkeys are never backed up (they are bound to a device), so a restored instance needs a fresh invite — see [§8.5 of the plan](docs/colo-plan.md) for the runbook. M8 also brought a phone pass (the offline indicator was invisible on phones; the table picker gave no touch feedback; resize handles were too small to hit), a security review, and `npm run ci` as the gate CI runs. **Still to do:** connect Workers Builds, deploy, and check a real phone.
+**M8 (hardening):** the account menu on the document list has **Download backup**, which saves every member, every document — soft-deleted ones included — and every image as one NDJSON file; `npm run restore -- --file <backup>` puts it back into a local instance, keeping document ids so images still resolve. Passwords and passkeys are never backed up, so a restored instance needs the owner's passkey enrolled and each member's password set again — see [§8.5 of the plan](docs/colo-plan.md) for the runbook. M8 also brought a phone pass (the offline indicator was invisible on phones; the table picker gave no touch feedback; resize handles were too small to hit), a security review, and `npm run ci` as the gate CI runs. **Still to do:** connect Workers Builds, deploy, and check a real phone.
+
+**M9 (workspaces), built, not deployed:** invite links are gone. The owner's dashboard at `/admin` (passkey sign-in, enrolled once with `npm run admin:enroll`) creates workspaces, sets how many members each may have (10 by default, up to 100), adds members with a password it shows once, resets passwords and disables members. Members sign in with the workspace ID, their email and that password, see only their workspace's documents, and can change their password from the account menu. The workspace from before M9 is `main`; its members need passwords set in the dashboard before they can sign in again. All workspaces share one Free allowance — roughly 20–25 people typing heavily a day in total ([ADR 0006](docs/decisions/0006-workspaces-and-password-sign-in.md)).
