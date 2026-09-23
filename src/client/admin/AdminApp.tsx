@@ -163,13 +163,13 @@ function Workspaces({ onSessionEnded }: { onSessionEnded: () => void }) {
             <LoaderCircle className="size-5 animate-spin" aria-label="Loading" />
           </div>
         ) : (
-          <Table>
+          <Table className="table-fixed">
             <TableHeader>
               <TableRow>
-                <TableHead>Workspace</TableHead>
-                <TableHead>Members</TableHead>
-                <TableHead>Documents</TableHead>
-                <TableHead>Status</TableHead>
+                <TableHead className="px-4">Workspace</TableHead>
+                <TableHead className="w-28 px-4">Members</TableHead>
+                <TableHead className="w-28 px-4">Documents</TableHead>
+                <TableHead className="w-28 px-4">Status</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -179,7 +179,7 @@ function Workspaces({ onSessionEnded }: { onSessionEnded: () => void }) {
                   className="cursor-pointer"
                   onClick={() => navigate(`/admin/w/${encodeURIComponent(workspace.slug)}`)}
                 >
-                  <TableCell>
+                  <TableCell className="px-4 py-3">
                     {/* A real link, so the row is reachable by keyboard and screen reader too. */}
                     <a
                       href={`/admin/w/${encodeURIComponent(workspace.slug)}`}
@@ -191,14 +191,16 @@ function Workspaces({ onSessionEnded }: { onSessionEnded: () => void }) {
                       }}
                     >
                       {workspace.name}
-                      <span className="font-mono text-xs font-normal text-muted-foreground">{workspace.slug}</span>
+                      <span className="font-mono text-xs font-normal text-muted-foreground">
+                        ID: {workspace.slug}
+                      </span>
                     </a>
                   </TableCell>
-                  <TableCell>
+                  <TableCell className="px-4 py-3">
                     {workspace.members} / {workspace.maxMembers}
                   </TableCell>
-                  <TableCell>{workspace.documents}</TableCell>
-                  <TableCell>{statusBadge(workspace.disabledAt)}</TableCell>
+                  <TableCell className="px-4 py-3">{workspace.documents}</TableCell>
+                  <TableCell className="px-4 py-3">{statusBadge(workspace.disabledAt)}</TableCell>
                 </TableRow>
               ))}
             </TableBody>
