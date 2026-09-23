@@ -11,8 +11,8 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import logo from "../assets/logo.svg";
+import meadow from "../assets/auth/meadow.jpg";
 import { describeAuthError, lastWorkspace, rememberWorkspace, signIn } from "../auth";
-import { authIllustration } from "./illustration";
 import { authSeed } from "./seed";
 
 export function AuthCard({ title, description, children }: { title: string; description: string; children: ReactNode }) {
@@ -20,8 +20,12 @@ export function AuthCard({ title, description, children }: { title: string; desc
   // its recommended 1.5-4 range before the eyes reach the edge of the silhouette.
   const { ref } = useGaze({ travel: 3, lookAt: "pointer" });
   return (
-    <main className="flex h-svh overflow-hidden">
-      <div className="relative flex w-full items-center justify-center overflow-y-auto bg-muted/40 px-4 py-10 lg:w-1/2">
+    <main
+      className="relative flex h-svh items-center justify-center overflow-y-auto bg-cover bg-center px-4 py-10"
+      style={{ backgroundImage: `url(${meadow})` }}
+    >
+      {/* Wider than max-w-sm by the frame's padding and border, so the card keeps its full width. */}
+      <div className="w-full max-w-[calc(var(--container-sm)+1.125rem)] rounded-2xl border border-white/35 bg-white/10 p-2 shadow-xl backdrop-blur-md">
         <Card className="w-full max-w-sm">
           <CardHeader>
             <p className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
@@ -33,12 +37,9 @@ export function AuthCard({ title, description, children }: { title: string; desc
           </CardHeader>
           {children}
         </Card>
-        <div className="absolute bottom-6 left-1/2 -translate-x-1/2">
-          <Blobatar ref={ref} name={authSeed} size={72} background="circle" animate="always" title="" />
-        </div>
       </div>
-      <div className="hidden overflow-hidden lg:flex lg:w-1/2 lg:items-center lg:justify-center">
-        <img src={authIllustration} alt="" className="w-full" />
+      <div className="absolute bottom-6 left-1/2 -translate-x-1/2">
+        <Blobatar ref={ref} name={authSeed} size={72} background="circle" animate="always" title="" />
       </div>
     </main>
   );
